@@ -36,7 +36,7 @@ class RelPositionEmbedding(nn.Module):
 from mmcv.cnn.bricks.transformer import POSITIONAL_ENCODING
 from mmcv.runner import BaseModule
 
-@POSITIONAL_ENCODING.register_module()
+@POSITIONAL_ENCODING.register_module(force=True)
 class LearnedPositionalEncoding3D(BaseModule):
     """Position embedding with learnable embedding weights.
     Args:

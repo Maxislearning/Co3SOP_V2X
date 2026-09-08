@@ -18,7 +18,7 @@ import yaml
 from projects.mmdet3d_plugin.models.utils.transformation_utils import cal_dist, x1_to_x2
 
 
-@DATASETS.register_module()
+@DATASETS.register_module(force=True)
 class Co3SOP(NuScenesDataset):
     r"""NuScenes Dataset.
 

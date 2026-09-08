@@ -31,7 +31,7 @@ ext_module = ext_loader.load_ext(
 import pdb
 
 
-@ATTENTION.register_module()
+@ATTENTION.register_module(force=True)
 class VoxelCrossAttention(BaseModule):
     """An attention module used in BEVFormer.
     Args:

@@ -81,7 +81,7 @@ def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_lo
     return output.transpose(1, 2).contiguous()
 
 
-@ATTENTION.register_module()
+@ATTENTION.register_module(force=True)
 class MultiScaleDeformableAttention3D(BaseModule):
     """An attention module used in Deformable-Detr.
 

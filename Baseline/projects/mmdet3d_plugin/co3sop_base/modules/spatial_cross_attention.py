@@ -31,7 +31,7 @@ ext_module = ext_loader.load_ext(
 import pdb
 
 
-@ATTENTION.register_module()
+@ATTENTION.register_module(force=True)
 class SpatialCrossAttention(BaseModule):
     """An attention module used in BEVFormer.
     Args:
@@ -178,7 +178,7 @@ class SpatialCrossAttention(BaseModule):
         return self.dropout(slots) + inp_residual
 
 
-@ATTENTION.register_module()
+@ATTENTION.register_module(force=True)
 class MSDeformableAttention3D(BaseModule):
     """An attention module used in BEVFormer based on Deformable-Detr.
     `Deformable DETR: Deformable Transformers for End-to-End Object Detection.

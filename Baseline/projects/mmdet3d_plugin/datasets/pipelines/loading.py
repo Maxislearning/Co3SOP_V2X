@@ -9,7 +9,7 @@ import random
 import os
 
 
-@PIPELINES.register_module()
+@PIPELINES.register_module(force=True)
 class LoadOccupancy(object):
     """Load occupancy groundtruth.
 

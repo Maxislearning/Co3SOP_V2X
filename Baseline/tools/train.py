@@ -84,7 +84,10 @@ def parse_args():
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
         help='job launcher')
-    parser.add_argument('--local_rank', type=int, default=0)
+    # torch>=2.0's launcher passes --local-rank (hyphen); this repo was
+    # written against an older torch that passed --local_rank (underscore).
+    # Accept both, same dest.
+    parser.add_argument('--local_rank', '--local-rank', dest='local_rank', type=int, default=0)
     parser.add_argument(
         '--autoscale-lr',
         action='store_true',

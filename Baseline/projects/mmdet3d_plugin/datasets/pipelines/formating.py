@@ -9,7 +9,7 @@ from mmdet.datasets.builder import PIPELINES
 from mmdet.datasets.pipelines import to_tensor
 from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
 
-@PIPELINES.register_module()
+@PIPELINES.register_module(force=True)
 class CustomDefaultFormatBundle3D(DefaultFormatBundle3D):
     """Default formatting bundle.F
     It simplifies the pipeline of formatting common fields for voxels,

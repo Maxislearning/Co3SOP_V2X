@@ -19,7 +19,7 @@ from mmcv.runner import force_fp32, auto_fp16
 from mmcv.cnn.bricks.transformer import build_positional_encoding
 from projects.mmdet3d_plugin.co3sop_base.modules.point_generator import MlvlPointGenerator
 
-@TRANSFORMER.register_module()
+@TRANSFORMER.register_module(force=True)
 class V2VFusionTransformer(BaseModule):
     """Implements the Detr3D transformer.
     Args:

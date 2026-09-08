@@ -6,7 +6,7 @@ from mmcv.runner import BaseModule, auto_fp16
 from mmdet.models import NECKS
 
 
-@NECKS.register_module()
+@NECKS.register_module(force=True)
 class CustomFPN(BaseModule):
     r"""Feature Pyramid Network.
 

@@ -8,7 +8,7 @@ from mmcv.runner import BaseModule
 
 import pdb
 
-@POSITIONAL_ENCODING.register_module()
+@POSITIONAL_ENCODING.register_module(force=True)
 class SinePositionalEncoding3D(BaseModule):
     """Position encoding with sine and cosine functions. Modified for 3D volumes (rather than 2D grids)
 
@@ -117,7 +117,7 @@ class SinePositionalEncoding3D(BaseModule):
         repr_str += f'eps={self.eps})'
         return repr_str
     
-@POSITIONAL_ENCODING.register_module()
+@POSITIONAL_ENCODING.register_module(force=True)
 class CustomSinePositionalEncoding3D(BaseModule):
     """Position encoding with sine and cosine functions. Modified for 3D volumes (rather than 2D grids)
 
@@ -229,7 +229,7 @@ class CustomSinePositionalEncoding3D(BaseModule):
         repr_str += f'eps={self.eps})'
         return repr_str
 
-@POSITIONAL_ENCODING.register_module()
+@POSITIONAL_ENCODING.register_module(force=True)
 class CustomLearnedPositionalEncoding3D(BaseModule):
     """Position embedding with learnable embedding weights.
 
