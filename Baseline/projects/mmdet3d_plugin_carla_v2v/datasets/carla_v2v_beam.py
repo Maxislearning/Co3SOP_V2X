@@ -46,7 +46,16 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
 
         beam_df = pd.read_csv(self.beam_csv_path)
         beam_df = beam_df[beam_df['tx_name'].isin(self.links)]
-        self._beam_by_key = {(int(r.sample_id), r.tx_name): r for r in beam_df.itertuples()}
+        # to_dict('records') (plain dicts), not itertuples() -- itertuples()
+        # rows are instances of a per-DataFrame dynamically-generated
+        # `pandas.core.frame.Pandas` namedtuple class, which isn't picklable
+        # (no importable module path), and workers_per_gpu>0 needs to pickle
+        # this whole dataset (self._beam_by_key included) to hand to worker
+        # processes. Same pattern CarlaV2VCo3SOP.load_annotations already
+        # uses for self._rows.
+        self._beam_by_key = {
+            (int(r['sample_id']), r['tx_name']): r for r in beam_df.to_dict('records')
+        }
 
         vehicle_2_sids = sorted(sid for (vn, sid) in self._by_key if vn == RX_VEHICLE)
         n_train = int(len(vehicle_2_sids) * TRAIN_RATIO)
@@ -74,7 +83,7 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
 
         row = self._beam_by_key[(int(frame_num), link)]
         data['gt_beam'] = np.array(
-            [row.optimal_tx_beam_idx, row.optimal_rx_beam_idx], dtype=np.int64)
+            [row['optimal_tx_beam_idx'], row['optimal_rx_beam_idx']], dtype=np.int64)
 
         tx_vn = self.LINK_VEHICLE[link]
         tx_pose = self.get_vehicle_data(scene, f'vehicle_{tx_vn}', frame_num)['pose']
@@ -85,7 +94,7 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
         data['tx_rx_geometry'] = np.array(
             [rel[0, 3], rel[1, 3], rel[2, 3], cal_dist(tx_pose, rx_pose), rel_yaw],
             dtype=np.float32)
-        data['beam_eval_meta'] = {'max_transmission_rate': float(row.max_transmission_rate)}
+        data['beam_eval_meta'] = {'max_transmission_rate': float(row['max_transmission_rate'])}
         return data
 
     def evaluate(self, results, **kwargs):
