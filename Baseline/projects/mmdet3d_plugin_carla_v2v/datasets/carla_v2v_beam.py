@@ -89,7 +89,11 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
         return data
 
     def evaluate(self, results, **kwargs):
-        results = [r['evaluation'] for r in results]
+        # `results` here is already the flat, per-sample list
+        # custom_multi_gpu_test (co3sop_base/apis/test.py) built via
+        # occ_results.extend(result['evaluation']) over every batch -- not a
+        # list of {'evaluation': ...}-wrapped dicts, that wrapper is gone by
+        # this point (see Co3SOPBeam.forward_test's docstring comment).
         tx_gt = np.concatenate([r['tx_gt'] for r in results])
         rx_gt = np.concatenate([r['rx_gt'] for r in results])
         tx_top5 = np.concatenate([r['tx_top5'] for r in results])

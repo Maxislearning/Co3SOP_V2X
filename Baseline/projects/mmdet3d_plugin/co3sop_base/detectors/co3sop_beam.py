@@ -31,10 +31,16 @@ class Co3SOPBeam(Co3SOPBase):
         oracle_rate = np.array(
             [img_metas[0].get('beam_eval_meta', {}).get('max_transmission_rate', np.nan)])
 
-        return {'evaluation': {
+        # custom_multi_gpu_test (co3sop_base/apis/test.py) does
+        # occ_results.extend(result['evaluation']) -- same contract
+        # evaluation_semantic() uses (a batch_size-length array/list) -- so
+        # this must be a length-1 list (samples_per_gpu=1), not a bare dict,
+        # or extend() would iterate this dict's *keys* instead of collecting
+        # one per-sample result.
+        return {'evaluation': [{
             'tx_gt': gt_beam[:, 0].cpu().numpy(),
             'rx_gt': gt_beam[:, 1].cpu().numpy(),
             'tx_top5': tx_top5.cpu().numpy(),
             'rx_top5': rx_top5.cpu().numpy(),
             'oracle_rate': oracle_rate,
-        }}
+        }]}
