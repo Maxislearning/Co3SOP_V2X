@@ -122,7 +122,7 @@ def eye_like(n, B, device, dtype):
     identity = torch.eye(n, device=device, dtype=dtype)
     return identity[None].repeat(B, 1, 1)
     
-@HEADS.register_module()
+@HEADS.register_module(force=True)
 class V2VOccHead(nn.Module): 
     def __init__(self,
                  *args,
@@ -270,7 +270,13 @@ class V2VOccHead(nn.Module):
                 constant_init(m.conv_offset, 0)
 
     @auto_fp16(apply_to=('mcar_feats'))
-    def forward(self, mcar_feats, img_metas):
+    def _encode_and_fuse(self, mcar_feats, img_metas):
+        """Per-car voxel encoding + confidence-gated cross-agent fusion.
+
+        Shared by V2VOccHead and BeamSelectionHead (dense_heads/beam_head.py) —
+        the beam head needs the exact same fused 3D volume this occupancy head
+        decodes, just skips the deblocks/occ conv stack below.
+        """
         car_num = len(mcar_feats)
         volume_embed = []
         confidences = []
@@ -362,6 +368,11 @@ class V2VOccHead(nn.Module):
         ego_feature = features[0][b,...].unsqueeze(0).permute(0, 1, 4, 3, 2).contiguous()
         # print(ego_feature.shape)
         # print(batch_fuse_features.shape)
+        return batch_fuse_features, confidences, volume_embed
+
+    def forward(self, mcar_feats, img_metas):
+        batch_fuse_features, confidences, volume_embed = self._encode_and_fuse(mcar_feats, img_metas)
+
         outputs = []
         # result = batch_fuse_features
         # for i in range(len(self.deblocks)):
@@ -387,7 +398,7 @@ class V2VOccHead(nn.Module):
         }
 
         return outs
-    
+
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self,
              gt_occ,

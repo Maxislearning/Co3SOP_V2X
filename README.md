@@ -21,6 +21,14 @@
 ## Baseline Model
 ![Overview](Figures/Baseline.png)
 
+## carla_V2V Extension: Collaborative Beam Selection (this fork)
+
+On top of the `carla_v2v_ego`/`carla_v2v_fusion` occupancy configs already in this fork (multi-agent perception on custom CARLA+Sionna RT data, see `Baseline/projects/configs/co3sop_base/co3sop_base_carla_v2v_*.py`), a beam-selection branch reuses the same image backbone, per-car voxel encoder and cross-agent fusion (`V2VOccHead._encode_and_fuse`) and swaps only the prediction head: instead of decoding the fused 3D scene feature into occupancy logits, `BeamSelectionHead` pools it, concatenates a small TX/RX relative-geometry embedding, and predicts the optimal TX/RX beam index (two independent 64-way classification heads, matching the 8x8 DFT codebook the Sionna RT beam simulation uses).
+
+Phase 1 scope: RX fixed to `vehicle_2`, TX restricted to the two car-mounted links (`TX_CAR1`=`vehicle_1`, `TX_CAR2`=`vehicle_3`) — these are the links CO3SOP's multi-agent perception already has a camera view for. Roadside TX stations (`TX_ROADSIDE_01`..`05`) have no corresponding vehicle viewpoint and are left for a later phase.
+
+Key files: `Baseline/projects/mmdet3d_plugin/co3sop_base/dense_heads/beam_head.py` (model), `Baseline/projects/mmdet3d_plugin_carla_v2v/datasets/carla_v2v_beam.py` (dataset — joins CARLA camera/pose data against `carla_V2V`'s Sionna beam-label CSV), `Baseline/projects/configs/co3sop_base/co3sop_base_carla_v2v_beam.py` (config, loads the pretrained `carla_v2v_fusion` checkpoint). No trained results yet — this section will get a benchmark table once training has actually run.
+
 ## Getting Start
 
 [Dataset Preparation](Docs/DatasetPreparation.md)

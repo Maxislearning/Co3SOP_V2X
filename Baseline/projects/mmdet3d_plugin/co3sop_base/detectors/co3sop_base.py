@@ -24,7 +24,7 @@ import torch.nn as nn
 import pdb
 
 
-@DETECTORS.register_module()
+@DETECTORS.register_module(force=True)
 class Co3SOPBase(MVXTwoStageDetector):
     def __init__(self,
                  cam_num=4,
