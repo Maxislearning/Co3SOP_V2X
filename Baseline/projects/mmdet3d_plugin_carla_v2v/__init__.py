@@ -4,7 +4,7 @@
 # projects.mmdet3d_plugin.co3sop_base.apis.train, since tools/test.py doesn't
 # have that same guarantee).
 import projects.mmdet3d_plugin  # noqa: F401  (registers Co3SOPBase, V2VOccHead, Co3SOP, etc.)
-from .datasets import CarlaV2VCo3SOP, CarlaV2VBeamCo3SOP, LoadCarlaOccupancy  # noqa: F401
+from .datasets import CarlaV2VCo3SOP, CarlaV2VBeamCo3SOP, CarlaV2VTargetOccCo3SOP, LoadCarlaOccupancy  # noqa: F401
 
 # mmcv-full 1.7.2 (this env's version, needed for RTX 5090/torch2.7 — Co3SOP
 # was written against mmcv-full 1.4.0) still calls
@@ -53,4 +53,4 @@ def _run_ddp_forward_compat(self, *inputs, **kwargs):
 
 _mmcv_dist.MMDistributedDataParallel._run_ddp_forward = _run_ddp_forward_compat
 
-__all__ = ['CarlaV2VCo3SOP', 'CarlaV2VBeamCo3SOP', 'LoadCarlaOccupancy']
+__all__ = ['CarlaV2VCo3SOP', 'CarlaV2VBeamCo3SOP', 'CarlaV2VTargetOccCo3SOP', 'LoadCarlaOccupancy']

@@ -370,20 +370,23 @@ class V2VOccHead(nn.Module):
         # print(batch_fuse_features.shape)
         return batch_fuse_features, confidences, volume_embed
 
-    def forward(self, mcar_feats, img_metas):
-        batch_fuse_features, confidences, volume_embed = self._encode_and_fuse(mcar_feats, img_metas)
+    def _run_deblocks(self, batch_fuse_features):
+        """Shared multi-scale upsample chain, out_indices-selected outputs.
 
+        Extracted out of forward() so TargetAwareOccHead (target_occ_head.py)
+        can branch its own per-scale head off the same features without
+        paying for a second deblocks pass.
+        """
         outputs = []
-        # result = batch_fuse_features
-        # for i in range(len(self.deblocks)):
-        #     ego_feature = self.deblocks[i](ego_feature)
-        #     if i in self.out_indices:
-        #         outputs.append(ego_feature)
-
         for i in range(len(self.deblocks)):
             batch_fuse_features = self.deblocks[i](batch_fuse_features)
             if i in self.out_indices:
                 outputs.append(batch_fuse_features)
+        return outputs
+
+    def forward(self, mcar_feats, img_metas):
+        batch_fuse_features, confidences, volume_embed = self._encode_and_fuse(mcar_feats, img_metas)
+        outputs = self._run_deblocks(batch_fuse_features)
 
         occ_preds = []
         for i in range(len(outputs)):

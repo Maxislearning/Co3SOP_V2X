@@ -18,6 +18,8 @@ train half and none in val, which would make a beam val split empty. So this
 class does its own chronological 80/20 split over vehicle_2's own sample_ids
 instead (same TRAIN_RATIO carla_to_flashocc.py uses per-vehicle).
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from mmdet.datasets import DATASETS
@@ -34,10 +36,14 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
     LINK_VEHICLE = {'TX_CAR1': 1, 'TX_CAR2': 3}
 
     def __init__(self, beam_csv_path, links=('TX_CAR1', 'TX_CAR2'), los_only=False,
-                 *args, **kwargs):
+                 target_occ_root=None, *args, **kwargs):
         self.beam_csv_path = beam_csv_path
         self.links = links
         self.los_only = los_only
+        # Stage 2B: set to load per-(sample_id,link) target_mask GT
+        # (generate_target_occupancy.py's output) -- None leaves existing
+        # beam configs completely unaffected.
+        self.target_occ_root = Path(target_occ_root) if target_occ_root else None
         super().__init__(*args, **kwargs)
 
     def load_annotations(self, ann_file):
@@ -107,6 +113,17 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
             'is_los': bool(row['is_los']),
             'link': link,
         }
+
+        # target_role is an *input* (which identity the Target Head should
+        # look for), not a supervision label -- stays in img_metas alongside
+        # tx_rx_geometry/beam_eval_meta, not in the `keys` that go through
+        # CustomCollect3D's tensor path. gt_target (the mask) is the actual
+        # label, so it does go through `keys` like gt_beam/gt_occ.
+        if self.target_occ_root is not None:
+            target_path = self.target_occ_root / f'{int(frame_num):06d}' / f'{link}.npz'
+            data['gt_target'] = np.load(target_path)['target_mask'].astype(np.int64)
+            data['target_role'] = 0 if link == 'TX_CAR1' else 1  # 0=FRONT, 1=REAR
+
         return data
 
     @staticmethod

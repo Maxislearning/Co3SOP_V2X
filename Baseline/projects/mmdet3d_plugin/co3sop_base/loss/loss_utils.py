@@ -3,6 +3,33 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pdb
 
+
+def focal_loss(pred, target, alpha=0.25, gamma=2.0, ignore_index=255):
+    """Binary focal loss for a dense per-voxel target/non-target mask.
+    pred: raw logits [B, 2, ...] (2 = non-target/target). target: same
+    spatial shape as pred minus the class dim, values in {0, 1, ignore_index}.
+    Plain BCE would let an all-empty prediction get a deceptively low loss
+    since target voxels are a tiny fraction of the grid -- focal down-weights
+    the easy (empty) majority instead.
+    """
+    mask = target != ignore_index
+    target = target[mask].long()
+    logits = pred.permute(0, 2, 3, 4, 1)[mask]  # [N, 2]
+    ce = F.cross_entropy(logits, target, reduction='none')
+    pt = torch.exp(-ce)
+    focal_weight = alpha * (1 - pt) ** gamma
+    return (focal_weight * ce).mean()
+
+
+def dice_loss(pred, target, ignore_index=255, eps=1.0):
+    """Binary Dice loss on the target-class softmax probability."""
+    mask = target != ignore_index
+    target = target[mask].float()
+    prob = F.softmax(pred, dim=1)[:, 1][mask]  # P(target)
+    intersection = (prob * target).sum()
+    union = prob.sum() + target.sum()
+    return 1 - (2 * intersection + eps) / (union + eps)
+
 def multiscale_supervision(gt_occ, ratio, gt_shape):
     '''
     change ground truth shape as (B, W, H, Z) for each level supervision
