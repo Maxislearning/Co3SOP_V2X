@@ -33,9 +33,11 @@ TRAIN_RATIO = 0.8
 class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
     LINK_VEHICLE = {'TX_CAR1': 1, 'TX_CAR2': 3}
 
-    def __init__(self, beam_csv_path, links=('TX_CAR1', 'TX_CAR2'), *args, **kwargs):
+    def __init__(self, beam_csv_path, links=('TX_CAR1', 'TX_CAR2'), los_only=False,
+                 *args, **kwargs):
         self.beam_csv_path = beam_csv_path
         self.links = links
+        self.los_only = los_only
         super().__init__(*args, **kwargs)
 
     def load_annotations(self, ann_file):
@@ -46,6 +48,12 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
 
         beam_df = pd.read_csv(self.beam_csv_path)
         beam_df = beam_df[beam_df['tx_name'].isin(self.links)]
+        if self.los_only:
+            # No classifier for now -- assume LOS/NLOS state is known
+            # externally at serving time (deferred, see plan discussion) and
+            # just don't train/serve on NLOS at all. TX_CAR2 is 100% LOS in
+            # this data already; this only drops TX_CAR1's ~67/783 NLOS rows.
+            beam_df = beam_df[beam_df['is_los']]
         # to_dict('records') (plain dicts), not itertuples() -- itertuples()
         # rows are instances of a per-DataFrame dynamically-generated
         # `pandas.core.frame.Pandas` namedtuple class, which isn't picklable
