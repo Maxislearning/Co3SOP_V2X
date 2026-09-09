@@ -94,8 +94,20 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
         data['tx_rx_geometry'] = np.array(
             [rel[0, 3], rel[1, 3], rel[2, 3], cal_dist(tx_pose, rx_pose), rel_yaw],
             dtype=np.float32)
-        data['beam_eval_meta'] = {'max_transmission_rate': float(row['max_transmission_rate'])}
+        data['beam_eval_meta'] = {
+            'max_transmission_rate': float(row['max_transmission_rate']),
+            'is_los': bool(row['is_los']),
+            'link': link,
+        }
         return data
+
+    @staticmethod
+    def _topk_accs(tx_gt, rx_gt, tx_top5, rx_top5, prefix=''):
+        out = {}
+        for k in (1, 3, 5):
+            out[f'{prefix}tx_top{k}_acc'] = float((tx_top5[:, :k] == tx_gt[:, None]).any(1).mean())
+            out[f'{prefix}rx_top{k}_acc'] = float((rx_top5[:, :k] == rx_gt[:, None]).any(1).mean())
+        return out
 
     def evaluate(self, results, **kwargs):
         # `results` here is already the flat, per-sample list
@@ -107,11 +119,20 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
         rx_gt = np.concatenate([r['rx_gt'] for r in results])
         tx_top5 = np.concatenate([r['tx_top5'] for r in results])
         rx_top5 = np.concatenate([r['rx_top5'] for r in results])
+        # is_los only exists for TX_CAR1-link samples (TX_CAR2 is 100% LOS in
+        # this data, see carla_V2V channel_summary CSV) -- default True for
+        # older result dicts that predate this field.
+        is_los = np.concatenate([r.get('is_los', np.array([True])) for r in results])
 
-        out = {}
-        for k in (1, 3, 5):
-            out[f'tx_top{k}_acc'] = float((tx_top5[:, :k] == tx_gt[:, None]).any(1).mean())
-            out[f'rx_top{k}_acc'] = float((rx_top5[:, :k] == rx_gt[:, None]).any(1).mean())
+        out = self._topk_accs(tx_gt, rx_gt, tx_top5, rx_top5)
         out['oracle_rate_mean'] = float(
             np.nanmean(np.concatenate([r['oracle_rate'] for r in results])))
+        out['n_los'] = int(is_los.sum())
+        out['n_nlos'] = int((~is_los).sum())
+        if out['n_los'] > 0:
+            out.update(self._topk_accs(
+                tx_gt[is_los], rx_gt[is_los], tx_top5[is_los], rx_top5[is_los], prefix='los_'))
+        if out['n_nlos'] > 0:
+            out.update(self._topk_accs(
+                tx_gt[~is_los], rx_gt[~is_los], tx_top5[~is_los], rx_top5[~is_los], prefix='nlos_'))
         return out

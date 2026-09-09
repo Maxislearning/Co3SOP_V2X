@@ -28,8 +28,9 @@ class Co3SOPBeam(Co3SOPBase):
         # samples_per_gpu=1 throughout this codebase (see co3sop_base_carla_v2v_*
         # configs) -- img_metas is always a single-element list, same convention
         # V2VOccHead._encode_and_fuse and Co3SOPBase.forward_test already rely on.
-        oracle_rate = np.array(
-            [img_metas[0].get('beam_eval_meta', {}).get('max_transmission_rate', np.nan)])
+        beam_eval_meta = img_metas[0].get('beam_eval_meta', {})
+        oracle_rate = np.array([beam_eval_meta.get('max_transmission_rate', np.nan)])
+        is_los = np.array([beam_eval_meta.get('is_los', True)])
 
         # custom_multi_gpu_test (co3sop_base/apis/test.py) does
         # occ_results.extend(result['evaluation']) -- same contract
@@ -43,4 +44,5 @@ class Co3SOPBeam(Co3SOPBase):
             'tx_top5': tx_top5.cpu().numpy(),
             'rx_top5': rx_top5.cpu().numpy(),
             'oracle_rate': oracle_rate,
+            'is_los': is_los,
         }]}
