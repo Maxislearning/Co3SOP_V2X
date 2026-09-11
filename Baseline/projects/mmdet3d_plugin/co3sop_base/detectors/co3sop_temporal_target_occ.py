@@ -34,7 +34,15 @@ class Co3SOPTemporalTargetOcc(Co3SOPBase):
         return mcar_feats_list, img_metas_list
 
     def forward_train(self, img_metas=None, img=None,
-                       gt_occ_future=None, gt_target_future=None, gt_occ_aux_k=None):
+                       gt_occ_future=None, gt_target_future=None, gt_occ_aux_k=None, **kwargs):
+        # **kwargs swallows target_center_raw (CarlaV2VTemporalTargetOccCo3SOP
+        # attaches it to every example for post-hoc boundary-subset analysis,
+        # not as a training input) and anything else the dataset adds later --
+        # mmdet's train_step calls self(**data_batch) with every collated key,
+        # not just the ones a given forward_train explicitly declares. Missing
+        # this crashed the very first real training iteration with a TypeError
+        # (the smoke test didn't catch it because it called forward_train with
+        # explicit kwargs directly, never model(**full_batch)).
         mcar_feats_list, img_metas_list = self._extract_queue_feats(img, img_metas)
         preds = self.pts_bbox_head(mcar_feats_list, img_metas_list)
         return self.pts_bbox_head.loss(

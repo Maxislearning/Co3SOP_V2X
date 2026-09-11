@@ -150,6 +150,27 @@ def run_c1():
     print(f'[C1]   same translation in feature cells (meters / {voxel_size:.4f} m-per-cell): {trans_cells}')
     print('-' * 70)
 
+    # Regression check for a real bug this smoke test's earlier version
+    # MISSED (caught only once real training started): mmdet's train_step
+    # calls `self(**data_batch)` with *every* collated key, not just the
+    # ones a given forward_train explicitly names -- CarlaV2VTemporalTargetOccCo3SOP
+    # also attaches target_center_raw (for post-hoc boundary-subset analysis,
+    # never a model input) to every example, and Co3SOPTemporalTargetOcc.
+    # forward_train originally had no **kwargs to swallow it, so the very
+    # first real training iteration crashed with
+    # `TypeError: forward_train() got an unexpected keyword argument
+    # 'target_center_raw'` even though this smoke test (calling forward_train
+    # with explicit kwargs directly, never model(**batch)) reported success.
+    # Exercise the exact real call path here so that class of bug can't hide
+    # again.
+    model.zero_grad()
+    real_path_batch = dict(
+        img=img, img_metas=img_metas,
+        gt_occ_future=gt_occ_future_t, gt_target_future=gt_target_future_t,
+        gt_occ_aux_k=gt_occ_aux_k_t, target_center_raw=batch['target_center_raw'])
+    real_path_losses = model(**real_path_batch)
+    print(f'[C1] model(**batch) (real train_step call path) succeeded, loss keys: {list(real_path_losses.keys())}')
+
     losses = model.pts_bbox_head.loss(
         gt_occ_future_t, gt_target_future_t,
         model.pts_bbox_head(mcar_feats_list, img_metas_list),
