@@ -45,6 +45,70 @@ from projects.mmdet3d_plugin.co3sop_base.loss.loss_utils import multiscale_super
 S_FLIP = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]], dtype=np.float64)
 
 
+def warp_fused_to_t(fused_k, img_metas_k, identity=False):
+    """Shared by TemporalTargetAwareOccHead (v1, naive concat) and
+    GatedTemporalTargetAwareOccHead (v2, gated residual) -- this warp step
+    itself doesn't change between v1/v2, only what happens to its output
+    afterward does. Extracted to a module-level function (it never used
+    `self`) so v2 doesn't have to inherit v1's temporal_fusion/aux_occ
+    modules just to reuse this.
+
+    fused_k: [B,C,W,H,Z] -- Co3SOP's NATIVE fused-feature layout (see
+    _encode_and_fuse / v2vocchead.py:359-366). This is NOT the same axis
+    order kornia.warp_affine3d requires -- see the AXIS-ORDER REQUIREMENT
+    note in this module's header docstring and tools/verify_temporal_
+    alignment.py: kornia's (X,Y,Z)-ordered matrix rows must land on the
+    tensor's (last,middle,first) *spatial* axes, so this function converts
+    Co3SOP's native [B,C,W,H,Z] layout to kornia's required [B,C,Z,H,W]
+    layout before calling warp_affine3d, and converts back to [B,C,W,H,Z]
+    (Co3SOP's convention) on the way out. Every caller of this function
+    receives/passes Co3SOP-layout tensors; the kornia-layout permutation is
+    entirely internal to this function.
+
+    img_metas_k: list of B dicts, each carrying that batch item's raw (no
+    S-flip) temporal_trans_to_t matrix for this frame k (dataset-computed
+    x1_to_x2(pose_k, pose_t), identity when k is already the last/current
+    frame).
+
+    identity=True (Stage 2C-v2 "misaligned-history" sanity check only):
+    skip the real temporal_trans_to_t entirely and warp with an identity
+    matrix instead -- tests whether the model depends on *correct*
+    geometric alignment of otherwise-real, own-sample history content,
+    as distinct from the "shuffled-history" check (real alignment, wrong
+    sample's content) that lives in the analysis script.
+    """
+    B, C, W, H, Z = fused_k.shape
+    voxel_size = 0.1 * 48 / Z  # exact formula _encode_and_fuse uses (v2vocchead.py:313)
+
+    if identity:
+        raw = np.tile(np.eye(4, dtype=np.float64)[None], (B, 1, 1))
+    else:
+        raw = np.stack([np.asarray(m['temporal_trans_to_t'], dtype=np.float64)
+                         for m in img_metas_k], axis=0)  # [B,4,4], no S-flip yet
+        raw = raw.copy()
+        raw[:, :3, :3] = S_FLIP[None] @ raw[:, :3, :3] @ S_FLIP[None]
+        raw[:, :3, 3] = np.einsum('ij,bj->bi', S_FLIP, raw[:, :3, 3])
+
+    matrix = fused_k.new_tensor(raw).view(B, 1, 4, 4)
+    matrix = get_discretized_transformation_matrix_3d(matrix, voxel_size, 1)
+    matrix = matrix.view(B, 3, 4)
+    # dsize argument order for get_transformation_matrix_3d must literally
+    # mirror the proven inter-agent call at v2vocchead.py:327 -- (W,H,Z),
+    # NOT (Z,H,W) (get_rotation_matrix3d's own `H,W,Z = dsize` unpacking
+    # makes this a *different* convention than warp_affine3d's own dsize
+    # below -- harmless in the real model only because H==W==50 there, but
+    # the call site's literal argument order must still be copied exactly).
+    matrix = get_transformation_matrix_3d(matrix, (W, H, Z)).view(B, 3, 4)
+
+    # Co3SOP native layout [B,C,W,H,Z] -> kornia-required layout [B,C,Z,H,W].
+    fused_k_zhw = fused_k.permute(0, 1, 4, 3, 2).contiguous()
+    aligned_zhw = kornia.geometry.transform.warp_affine3d(
+        fused_k_zhw, matrix, (Z, H, W), flags='bilinear', padding_mode='zeros', align_corners=True)
+    # kornia layout -> back to Co3SOP native [B,C,W,H,Z].
+    aligned = aligned_zhw.permute(0, 1, 4, 3, 2).contiguous()
+    return aligned
+
+
 @HEADS.register_module(force=True)
 class TemporalTargetAwareOccHead(TargetAwareOccHead):
     # Fixed at 3 for Stage 2C v1 -- deliberately not a general K=1..N head
@@ -78,37 +142,11 @@ class TemporalTargetAwareOccHead(TargetAwareOccHead):
             in_channels=fused_channels, out_channels=self.num_classes,
             kernel_size=1, stride=1, padding=0)
 
-    def _warp_to_t(self, fused_k, img_metas_k):
-        """fused_k: [B,C,W,H,Z] (native _encode_and_fuse output layout).
-        Returns the same shape, warped from frame k's own RX pose into the
-        current/last frame's RX pose. img_metas_k: list of B dicts, each
-        carrying that batch item's raw (no S-flip) temporal_trans_to_t
-        matrix for this frame k (dataset-computed x1_to_x2(pose_k, pose_t),
-        identity when k is already the last/current frame)."""
-        B, C, W, H, Z = fused_k.shape
-        voxel_size = 0.1 * 48 / Z  # exact formula _encode_and_fuse uses (v2vocchead.py:313)
-
-        raw = np.stack([np.asarray(m['temporal_trans_to_t'], dtype=np.float64)
-                         for m in img_metas_k], axis=0)  # [B,4,4], no S-flip yet
-        raw = raw.copy()
-        raw[:, :3, :3] = S_FLIP[None] @ raw[:, :3, :3] @ S_FLIP[None]
-        raw[:, :3, 3] = np.einsum('ij,bj->bi', S_FLIP, raw[:, :3, 3])
-
-        matrix = fused_k.new_tensor(raw).view(B, 1, 4, 4)
-        matrix = get_discretized_transformation_matrix_3d(matrix, voxel_size, 1)
-        matrix = matrix.view(B, 3, 4)
-        # dsize argument order for get_transformation_matrix_3d must
-        # literally mirror the proven inter-agent call at v2vocchead.py:327
-        # (W,H,Z), not (Z,H,W) -- see verify_temporal_alignment.py's note on
-        # why these two dsize conventions differ (get_rotation_matrix3d's
-        # own `H,W,Z = dsize` unpacking).
-        matrix = get_transformation_matrix_3d(matrix, (W, H, Z)).view(B, 3, 4)
-
-        fused_k_zhw = fused_k.permute(0, 1, 4, 3, 2).contiguous()  # [B,C,W,H,Z] -> [B,C,Z,H,W]
-        aligned_zhw = kornia.geometry.transform.warp_affine3d(
-            fused_k_zhw, matrix, (Z, H, W), flags='bilinear', padding_mode='zeros', align_corners=True)
-        aligned = aligned_zhw.permute(0, 1, 4, 3, 2).contiguous()  # back to [B,C,W,H,Z]
-        return aligned
+    def _warp_to_t(self, fused_k, img_metas_k, identity=False):
+        """Thin wrapper kept for backward compatibility -- body now lives in
+        the module-level warp_fused_to_t (shared with v2), see its
+        docstring for the full axis-layout explanation."""
+        return warp_fused_to_t(fused_k, img_metas_k, identity=identity)
 
     def forward(self, mcar_feats_list, img_metas_list):
         """mcar_feats_list / img_metas_list: length QUEUE_LEN, frame order

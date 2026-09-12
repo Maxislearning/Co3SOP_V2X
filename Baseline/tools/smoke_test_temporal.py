@@ -188,9 +188,116 @@ def run_c1():
     print(f'[C1] peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB')
 
 
+def run_c1_v2():
+    print('=' * 70)
+    print('C1-v2 smoke test (co3sop_base_carla_v2v_temporal_c1_v2.py, gated residual fusion)')
+    print('=' * 70)
+    cfg = Config.fromfile('projects/configs/co3sop_base/co3sop_base_carla_v2v_temporal_c1_v2.py')
+    dataset = build_dataset(cfg.data.train)
+    print(f'[C1-v2] dataset size: {len(dataset)}')
+
+    model = build_model(cfg.model, train_cfg=cfg.get('train_cfg'), test_cfg=cfg.get('test_cfg'))
+    mmcv.runner.load_checkpoint(model, cfg.load_from, map_location='cpu', strict=False)
+    model.train()
+    model.cuda()
+    head = model.pts_bbox_head
+
+    def make_data(idx):
+        from mmcv.parallel import collate
+        b = collate([dataset[idx]], samples_per_gpu=1)
+        return dict(
+            img=b['img'].data[0].cuda(),
+            img_metas=b['img_metas'].data[0],
+            gt_occ_future=torch.as_tensor(np.asarray(b['gt_occ_future'])).cuda(),
+            gt_target_future=torch.as_tensor(np.asarray(b['gt_target_future'])).cuda(),
+            gt_occ_aux_k=torch.as_tensor(np.asarray(b['gt_occ_aux_k'])).cuda(),
+            target_center_raw=b['target_center_raw'],
+        )
+
+    # ---- zero-init verification: F_temporal must equal C exactly before any
+    # training. model.eval() here specifically (not model.train()) so the
+    # transformer's ffn_dropout doesn't make two passes over the same input
+    # diverge -- computing aligned_feats ONCE and reusing aligned_feats[-1]
+    # as C (rather than calling _encode_and_fuse a second time) removes that
+    # risk entirely regardless of mode, but eval() avoids it doubly.
+    from projects.mmdet3d_plugin.co3sop_base.dense_heads.temporal_target_occ_head import warp_fused_to_t
+    data0 = make_data(0)
+    model.eval()
+    with torch.no_grad():
+        mcar_feats_list, img_metas_list = model._extract_queue_feats(data0['img'], data0['img_metas'])
+        aligned_feats = []
+        for k in range(head.QUEUE_LEN):
+            fused_k, _, _ = head._encode_and_fuse(mcar_feats_list[k], img_metas_list[k])
+            aligned_feats.append(warp_fused_to_t(fused_k, img_metas_list[k]))
+        fused_temporal, (g1, g2) = head.fuse_aligned(aligned_feats)
+        C_direct = aligned_feats[-1]
+    model.train()
+    max_diff = (fused_temporal - C_direct).abs().max().item()
+    print(f'[C1-v2] zero-init check: max|F_temporal - C| = {max_diff:.3e} (expect ~0.0 at init)')
+    assert max_diff < 1e-5, 'zero-init failed: F_temporal != C at initialization'
+    print(f'[C1-v2] gate activations at init: g1 mean={g1.mean().item():.4f} std={g1.std().item():.4f}, '
+          f'g2 mean={g2.mean().item():.4f} std={g2.std().item():.4f} (expect ~0.5, sigmoid(~0))')
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+
+    # ---- step 1: first-ever backward. temporal_conv2 (zero-init final layer)
+    # must get nonzero grad; gate1/gate2/temporal_conv1 are legitimately
+    # allowed to be zero here (their gradient flows through temporal_conv2's
+    # weight, which is exactly zero on this first pass) -- NOT a dead branch.
+    optimizer.zero_grad()
+    losses = model(**data0)
+    total = sum(v.mean() if v.dim() > 0 else v for v in losses.values() if isinstance(v, torch.Tensor))
+    total.backward()
+
+    def grad_nonzero(module):
+        return any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in module.parameters())
+
+    step1_conv2 = grad_nonzero(head.temporal_conv2)
+    step1_conv1 = grad_nonzero(head.temporal_conv1)
+    step1_gate1 = grad_nonzero(head.gate1)
+    step1_gate2 = grad_nonzero(head.gate2)
+    print(f'[C1-v2] step 1 (pre-optimizer.step) grad-nonzero: temporal_conv2={step1_conv2} '
+          f'(MUST be True) temporal_conv1={step1_conv1} gate1={step1_gate1} gate2={step1_gate2} '
+          f'(these three are ALLOWED to be False here -- zero-init final layer blocks their gradient path)')
+    assert step1_conv2, 'temporal_conv2 (zero-init final layer) must receive nonzero gradient on step 1'
+
+    optimizer.step()
+
+    # ---- step 2: a second, different real batch, after temporal_conv2's
+    # weights are no longer exactly zero -- gate1/gate2/temporal_conv1 must
+    # now show nonzero gradient too, or they're a dead branch.
+    optimizer.zero_grad()
+    data1 = make_data(1)
+    losses2 = model(**data1)
+    total2 = sum(v.mean() if v.dim() > 0 else v for v in losses2.values() if isinstance(v, torch.Tensor))
+    total2.backward()
+
+    step2_conv2 = grad_nonzero(head.temporal_conv2)
+    step2_conv1 = grad_nonzero(head.temporal_conv1)
+    step2_gate1 = grad_nonzero(head.gate1)
+    step2_gate2 = grad_nonzero(head.gate2)
+    print(f'[C1-v2] step 2 (post-optimizer.step, 2nd batch) grad-nonzero: '
+          f'temporal_conv2={step2_conv2} temporal_conv1={step2_conv1} gate1={step2_gate1} gate2={step2_gate2} '
+          f'(ALL FOUR must be True now)')
+    assert all([step2_conv2, step2_conv1, step2_gate1, step2_gate2]), \
+        'gate1/gate2/temporal_conv1/temporal_conv2 must all have nonzero gradient by step 2 -- dead branch otherwise'
+
+    all_finite = all(torch.isfinite(v).all() for v in losses2.values() if isinstance(v, torch.Tensor))
+    print(f'[C1-v2] all losses finite: {all_finite}')
+    print(f'[C1-v2] peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB')
+
+    # ---- parameter count comparison vs v1 ----
+    n_v2 = sum(p.numel() for p in (list(head.gate1.parameters()) + list(head.gate2.parameters())
+                                    + list(head.temporal_conv1.parameters()) + list(head.temporal_conv2.parameters())))
+    print(f'[C1-v2] new fusion-module param count: {n_v2:,} (v1 temporal_fusion was ~2,986,368)')
+
+
 if __name__ == '__main__':
     run_c0()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     run_c1()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    run_c1_v2()
     print('\nSmoke test complete.')
