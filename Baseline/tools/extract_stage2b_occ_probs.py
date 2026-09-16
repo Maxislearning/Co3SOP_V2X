@@ -171,6 +171,46 @@ def main():
           f'(expect ~0 -- confirms Scene branch is role-independent)')
     assert max_scene_diff < 1e-3, 'Scene branch output differs between links of the same sample -- role leakage?'
 
+    write_version_manifest()
+
+
+def write_version_manifest():
+    """So a future reader of OUT_DIR knows which beam CSV/checkpoint/panel
+    config it corresponds to without re-deriving it from git history."""
+    import hashlib
+    import json
+    from datetime import datetime
+
+    def sha256_of(path):
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
+    sys.path.insert(0, '/home/admin0/carla_V2V/src')
+    import panel_beamforming as pb
+
+    manifest = {
+        'generated_at': datetime.now().isoformat(),
+        'out_dir': OUT_DIR,
+        'beam_csv': BEAM_CSV,
+        'beam_csv_sha256': sha256_of(BEAM_CSV),
+        'stage2b_config': CONFIG,
+        'stage2b_checkpoint': CKPT,
+        'stage2b_checkpoint_sha256': sha256_of(CKPT),
+        'native_ego_frame': True,
+        'canonicalization': False,
+        'num_panels': pb.NUM_PANELS,
+        'beams_per_panel': pb.BEAMS_PER_PANEL,
+        'num_classes': pb.NUM_PANELS * pb.BEAMS_PER_PANEL,
+        'panel_enum': {name: idx for idx, name in pb.PANEL_NAMES.items()},
+    }
+    manifest_path = os.path.join(OUT_DIR, 'dataset_version.json')
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    print(f'[done] wrote version manifest: {manifest_path}')
+
 
 if __name__ == '__main__':
     main()
