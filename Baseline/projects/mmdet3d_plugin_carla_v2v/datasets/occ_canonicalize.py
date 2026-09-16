@@ -1,4 +1,23 @@
-"""Stage 3, Audit 1b: rotates Stage 2B's RX-centered, RX-YAW-ALIGNED Scene/
+"""**RETIRED, 2026-09-16 (carla_V2V 任务13-17/Co3SOP Phase 2)** -- no longer
+called anywhere in the live Stage 3 pipeline. Kept only for the verified
+rotation math and history; do not wire this back in without re-reading why
+it was retired.
+
+Why retired: this canonicalization existed because the OLD beam codebook
+used a single, heading-independent antenna orientation (carla_V2V/data/
+script.py's Transmitter/Receiver both got a fixed orientation=(0,-pi/2,0)
+regardless of vehicle position -- see this file's original docstring below,
+kept for context). The 4-panel redesign (carla_V2V 任务13 on) replaced that
+with panels whose orientation is tied to the vehicle's own yaw, so the new
+beam label is itself vehicle-ego-relative -- the same kind of quantity
+Occupancy already natively is. Canonicalizing to world axes now, then
+recomputing the model, would undo the alignment on purpose. Stage 3 (Co3SOP
+Phase 2) reverted to Stage 2B's native RX-ego Occupancy directly;
+OccBeamDataset/extract_stage2b_occ_probs.py no longer import this module.
+
+--- original docstring, describing what this did when it was live ---
+
+Stage 3, Audit 1b: rotates Stage 2B's RX-centered, RX-YAW-ALIGNED Scene/
 Target Occupancy into RX-centered, WORLD-AXIS-ALIGNED Occupancy, offline,
 before either GT or Predicted volumes ever reach OccBeamDataset/the Beam
 Encoder.

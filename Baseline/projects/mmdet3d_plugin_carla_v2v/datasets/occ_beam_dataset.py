@@ -2,15 +2,21 @@
 mmdet3d-registered; this never touches a camera image, the per-car
 backbone, or Co3SOP's cross-agent fusion, so there's nothing the
 Config/Runner/DATASETS registry machinery would buy here). Loads Step 1's
-already-canonicalized GT/Predicted Scene+Target volumes plus the beam
-labels, for one of the B0-B3 ablations.
+GT/Predicted Scene+Target volumes plus the beam labels, for one of the
+B0-B3 ablations.
+
+**2026-09-16 (Phase 2): world-axis canonicalization removed.** Volumes are
+Stage 2B's native RX-ego, RX-yaw-aligned frame, unrotated -- see
+occ_canonicalize.py's retirement note. This matches the new 4-panel beam
+label's own frame (vehicle-ego-relative, not world-fixed), so no rotation
+is needed. `CANON_DIR` (kept as the variable name so callers don't need to
+change) now points at the native (non-canonicalized) extraction output.
 
 Train/val split is NEVER recomputed here -- it locks onto Stage 2B's own
 actual (sample_id,link) sets (Audit 1c) by building CarlaV2VTargetOccCo3SOP
 directly (same object tools/extract_stage2b_occ_probs.py already validated
 against), reading its .data_infos. No `tx_rx_geometry`, no pose, no RX yaw
-anywhere in this file -- RX yaw was fully consumed inside Step 1's offline
-canonicalization.
+anywhere in this file.
 """
 import os
 
@@ -19,8 +25,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-CANON_DIR = '/home/admin0/carla_V2V/occupancy_prediction_beam/beam_occ_canonical'
-BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/channel_summary_from_carla_20260904_145458.csv'
+CANON_DIR = '/home/admin0/carla_V2V/occupancy_prediction_beam/beam_occ_native'
+BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/channel_summary_from_carla_20260916_004652.csv'
 CONFIG_FOR_SPLIT = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ.py'
 
 

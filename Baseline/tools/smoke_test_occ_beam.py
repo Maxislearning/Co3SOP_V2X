@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, '/home/admin0/carla_V2V/src')
 
 from projects.mmdet3d_plugin_carla_v2v.datasets.occ_beam_dataset import OccBeamDataset, BEAM_CSV, CANON_DIR
-from projects.mmdet3d_plugin_carla_v2v.datasets.occ_canonicalize import canonicalize_to_world_axes
 from projects.mmdet3d_plugin.co3sop_base.dense_heads.occ_beam_encoder import OccupancyBeamEncoder
 from generate_occupancy_gt import NX, NY, NZ, VOXEL, X_RANGE, Y_RANGE, world_to_ego, mark_pts
 
@@ -40,21 +39,52 @@ def check_2_3_same_sample_no_future():
     print('[OK] 2/3. Scene+Target share one (sample_id,link) directory; no future/t+1 files anywhere in extraction output')
 
 
-def check_4_canonical_frame():
-    world_rel = np.array([10.0, 5.0, 0.0], dtype=np.float32)
-    for yaw in (0.0, 90.0, -90.0):
-        grid = np.zeros((NX, NY, NZ), dtype=np.float32)
-        pts_ego = world_to_ego(world_rel[None, :], np.zeros(3, dtype=np.float32), yaw)
-        mark_pts(grid, pts_ego, 1.0)
-        canon = canonicalize_to_world_axes(grid, yaw, order=1, is_scene=False)
-        idx = np.argwhere(canon > 1e-6)
-        w = canon[canon > 1e-6]
-        c = (idx * w[:, None]).sum(0) / w.sum()
-        x = (c[0] + 0.5) * VOXEL + X_RANGE[0]
-        y = (c[1] + 0.5) * VOXEL + Y_RANGE[0]
-        err = np.hypot(x - world_rel[0], y - world_rel[1])
-        assert err < VOXEL, f'canonicalization regression at yaw={yaw}: err={err:.3f}m'
-    print('[OK] 4. RX_t-centered, world-axis-aligned canonicalization regression check (0/90/-90 deg) passes')
+def check_4_native_ego_frame_and_panel_alignment():
+    """任务21: world-axis canonicalization retired (occ_canonicalize.py),
+    Stage 3 now uses Stage 2B's native RX-ego frame as-is. This replaces the
+    old canonicalization regression check with two things:
+    (a) confirms mark_pts/world_to_ego (unrotated) still put a marker at a
+        known CARLA-relative offset into the voxel it belongs at -- no
+        canonicalization silently reintroduced.
+    (b) confirms the LOCKED Stage 3 reference-frame convention (任务21):
+        OCC +X<->FRONT, OCC +Y<->RIGHT, OCC -X<->REAR, OCC -Y<->LEFT --
+        i.e. a marker placed at CARLA's own right side must land at ego
+        +Y, matching panel_beamforming.PANEL_RIGHT's own azimuth offset
+        sign (+90 deg, 任务17), not the old (wrong) PANEL_LEFT association.
+    """
+    sys.path.insert(0, '/home/admin0/carla_V2V/src')
+    import panel_beamforming as pb
+
+    def carla_forward(yaw_deg):
+        a = np.radians(yaw_deg)
+        return np.array([np.cos(a), np.sin(a), 0.0], dtype=np.float32)
+
+    def carla_right(yaw_deg):
+        a = np.radians(yaw_deg)
+        return np.array([-np.sin(a), np.cos(a), 0.0], dtype=np.float32)
+
+    for yaw in (0.0, 90.0, -90.0, 37.0):
+        origin = np.zeros(3, dtype=np.float32)
+        for carla_dir, expect_ego_xy, panel in [
+            (carla_forward(yaw), (10.0, 0.0), pb.PANEL_FRONT),
+            (carla_right(yaw), (0.0, 10.0), pb.PANEL_RIGHT),
+            (-carla_right(yaw), (0.0, -10.0), pb.PANEL_LEFT),
+        ]:
+            world_pt = origin + carla_dir * 10.0
+            grid = np.zeros((NX, NY, NZ), dtype=np.float32)
+            pts_ego = world_to_ego(world_pt[None, :], origin, yaw)  # NOT rotated further -- native frame
+            mark_pts(grid, pts_ego, 1.0)
+            idx = np.argwhere(grid > 0)
+            assert idx.shape[0] > 0, f'yaw={yaw} panel={pb.PANEL_NAMES[panel]}: marker fell outside the grid'
+            c = idx.mean(0)
+            x = (c[0] + 0.5) * VOXEL + X_RANGE[0]
+            y = (c[1] + 0.5) * VOXEL + Y_RANGE[0]
+            err = np.hypot(x - expect_ego_xy[0], y - expect_ego_xy[1])
+            assert err < VOXEL, (
+                f'yaw={yaw} panel={pb.PANEL_NAMES[panel]}: expected ego {expect_ego_xy}, '
+                f'got ({x:.2f},{y:.2f}), err={err:.3f}m')
+    print('[OK] 4. native (non-canonicalized) RX-ego frame preserved; '
+          'OCC +X<->FRONT, +Y<->RIGHT, -Y<->LEFT confirmed against panel_beamforming\'s own enum (任务21)')
 
 
 def check_5_6_7_8_shapes_dtype():
@@ -120,7 +150,7 @@ def check_12_no_geometry():
 if __name__ == '__main__':
     check_1_label_correctness()
     check_2_3_same_sample_no_future()
-    check_4_canonical_frame()
+    check_4_native_ego_frame_and_panel_alignment()
     check_5_6_7_8_shapes_dtype()
     check_9_10_loss_and_grad()
     check_11_frozen()
