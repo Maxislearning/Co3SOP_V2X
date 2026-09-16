@@ -197,7 +197,12 @@ def dependency_checks(work_dir_b3_source, source, subsets):
     print(f'\n=== Dependency/shortcut checks on trained Pred-scene_target (source={source}) ===')
     ds = OccBeamDataset(split='val', source=source, channels='scene_target')
     model = OccupancyBeamEncoder(in_channels=4)
-    state = torch.load(os.path.join(work_dir_b3_source, 'last.pth'), map_location='cpu')
+    # 任务22: default is best.pth (early-stopped on val combined top1), not
+    # last.pth (end-of-schedule -- can be a WORSE, overfit checkpoint; the
+    # GT/scene_target sanity run showed last.pth's RX head fully collapsing
+    # to a single constant prediction on val, while best.pth still showed
+    # some real discrimination).
+    state = torch.load(os.path.join(work_dir_b3_source, 'best.pth'), map_location='cpu')
     model.load_state_dict(state)
     model.eval()
 
@@ -250,12 +255,15 @@ def main():
     subsets = compute_subsets(train_infos + val_infos, veh_df, bg_by_sid)
 
     print('\n' + '=' * 78)
-    print('GT / Predicted Occupancy Beam Encoder comparison (last.pth = fully-trained 30-epoch checkpoint)')
+    print('GT / Predicted Occupancy Beam Encoder comparison '
+          '(best.pth = early-stopped on best val combined top1, the default going forward '
+          '(任务22) -- last.pth = end-of-schedule, reported alongside for comparison since '
+          'it can be a worse, overfit checkpoint)')
     print('=' * 78)
     for source in ('gt', 'pred'):
         for channels in ('scene', 'target', 'scene_target'):
             work_dir = f'work_dirs/occ_beam_{source}_{channels}'
-            for ckpt in ('last.pth', 'best.pth'):
+            for ckpt in ('best.pth', 'last.pth'):
                 records = evaluate_occ_model(work_dir, source, channels, ckpt, subsets, beam_df)
                 print_table(f'{source}/{channels} [{ckpt}]', records)
 
