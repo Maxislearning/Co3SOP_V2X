@@ -29,7 +29,8 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, '/home/admin0/carla_V2V/src')
 from projects.mmdet3d_plugin_carla_v2v.datasets.occ_beam_dataset import OccBeamDataset
-from projects.mmdet3d_plugin.co3sop_base.dense_heads.occ_beam_encoder import OccupancyBeamEncoder
+from projects.mmdet3d_plugin.co3sop_base.dense_heads.occ_beam_encoder import (
+    OccupancyBeamEncoder, HierarchicalOccupancyBeamEncoder)
 import panel_beamforming as pb
 
 CHANNELS_TO_CIN = {'scene': 3, 'target': 1, 'scene_target': 4}
@@ -37,12 +38,23 @@ K = pb.BEAMS_PER_PANEL  # 16
 NUM_CLASSES = pb.NUM_PANELS * K  # 64
 
 
-def collect_logits(model, ds):
+def collect_logits(model, ds, architecture):
+    """Returns combined 64-way logits regardless of architecture -- for
+    'hierarchical', combines panel+in-panel logits via log-prob addition
+    (HierarchicalOccupancyBeamEncoder.combine_to_flat_logits) so every
+    metric below stays architecture-agnostic."""
     loader = DataLoader(ds, batch_size=16, shuffle=False, num_workers=2)
     tx_logits_all, rx_logits_all, tx_gt_all, rx_gt_all = [], [], [], []
     with torch.no_grad():
         for vol, tx, rx, _ in loader:
-            tx_logits, rx_logits = model(vol)
+            if architecture == 'flat':
+                tx_logits, rx_logits = model(vol)
+            else:
+                tx_panel, tx_inpanel, rx_panel, rx_inpanel = model(vol)
+                tx_logits = HierarchicalOccupancyBeamEncoder.combine_to_flat_logits(
+                    tx_panel, tx_inpanel, pb.NUM_PANELS, pb.BEAMS_PER_PANEL)
+                rx_logits = HierarchicalOccupancyBeamEncoder.combine_to_flat_logits(
+                    rx_panel, rx_inpanel, pb.NUM_PANELS, pb.BEAMS_PER_PANEL)
             tx_logits_all.append(tx_logits.numpy())
             rx_logits_all.append(rx_logits.numpy())
             tx_gt_all.append(tx.numpy())
@@ -132,25 +144,31 @@ def main():
     parser.add_argument('--channels', choices=list(CHANNELS_TO_CIN), required=True)
     parser.add_argument('--ckpt', default='best.pth')
     parser.add_argument('--work-dir', default=None)
+    parser.add_argument('--architecture', choices=['flat', 'hierarchical'], default='flat')
     args = parser.parse_args()
 
     work_dir = args.work_dir or f'work_dirs/occ_beam_{args.source}_{args.channels}'
     train_ds = OccBeamDataset(split='train', source=args.source, channels=args.channels)
     val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)
 
-    model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels])
+    if args.architecture == 'flat':
+        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels])
+    else:
+        model = HierarchicalOccupancyBeamEncoder(
+            in_channels=CHANNELS_TO_CIN[args.channels],
+            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL)
     state = torch.load(os.path.join(work_dir, args.ckpt), map_location='cpu')
     model.load_state_dict(state)
     model.eval()
 
-    tx_logits_tr, rx_logits_tr, tx_gt_tr, rx_gt_tr = collect_logits(model, train_ds)
-    tx_logits_va, rx_logits_va, tx_gt_va, rx_gt_va = collect_logits(model, val_ds)
+    tx_logits_tr, rx_logits_tr, tx_gt_tr, rx_gt_tr = collect_logits(model, train_ds, args.architecture)
+    tx_logits_va, rx_logits_va, tx_gt_va, rx_gt_va = collect_logits(model, val_ds, args.architecture)
 
-    print(f'\n========== {args.source}/{args.channels} [{args.ckpt}] -- TX ==========')
+    print(f'\n========== {args.source}/{args.channels} [{args.ckpt}, {args.architecture}] -- TX ==========')
     report_side('train', tx_logits_tr, tx_gt_tr, tx_gt_tr)
     report_side('val', tx_logits_va, tx_gt_va, tx_gt_tr)
 
-    print(f'\n========== {args.source}/{args.channels} [{args.ckpt}] -- RX ==========')
+    print(f'\n========== {args.source}/{args.channels} [{args.ckpt}, {args.architecture}] -- RX ==========')
     report_side('train', rx_logits_tr, rx_gt_tr, rx_gt_tr)
     report_side('val', rx_logits_va, rx_gt_va, rx_gt_tr)
 

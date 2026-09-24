@@ -72,9 +72,28 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
         }
 
         vehicle_2_sids = sorted(sid for (vn, sid) in self._by_key if vn == RX_VEHICLE)
-        n_train = int(len(vehicle_2_sids) * TRAIN_RATIO)
+        # 任务25 (2026-09-23，carla_V2V侧实验记录同名任务): 合并多个采集
+        # 来源后，sample_id本身不是全局连续的场景序号，而是"legacy(1-999) +
+        # 每个新run各自的+1000*k offset区间"(见carla_V2V的dataset_version
+        # manifest)。原来"排序后整体切80/20"的逻辑，在只有一个来源时等价于
+        # "按sample_id分桶、每个桶各自切80/20"，但合并后会把val几乎全部
+        # 集中在offset最大的1-2个来源(sample_id排序全局最靠后)——这正好
+        # 复现了任务22诊断出的"val场景太少、不代表整体多样性"问题，只是
+        # 换了一种方式重新引入。改成按offset区间(sid // 1000，legacy=0)
+        # 分桶，每个桶各自切80/20再合并——这样每个采集来源都按同样比例
+        # 贡献train和val，不会出现某个来源整体只在一边的情况。只有一个来源
+        # 时(所有sid同一个桶)跟原逻辑完全等价，不影响历史行为。
+        from collections import defaultdict
+        buckets = defaultdict(list)
+        for sid in vehicle_2_sids:
+            buckets[sid // 1000].append(sid)
         split = {'train': 'train', 'validate': 'val', 'val': 'val', 'test': 'val'}[ann_file]
-        split_sids = vehicle_2_sids[:n_train] if split == 'train' else vehicle_2_sids[n_train:]
+        split_sids = []
+        for bucket_sids in buckets.values():
+            bucket_sids = sorted(bucket_sids)
+            n_train = int(len(bucket_sids) * TRAIN_RATIO)
+            split_sids.extend(bucket_sids[:n_train] if split == 'train' else bucket_sids[n_train:])
+        split_sids = sorted(split_sids)
 
         scene = self.scenes[0]
         infos = []
@@ -87,6 +106,13 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
                     # tx vehicle's own image missing for this sample_id
                     # (carla_to_flashocc.py drops samples with missing images
                     # independently per vehicle) -- skip, can't build this link.
+                    continue
+                row = self._beam_by_key[(sid, link)]
+                if row['optimal_tx_beam_idx'] < 0 or row['optimal_rx_beam_idx'] < 0:
+                    # 任务26: num_paths=0(完全遮挡，零路径)的样本没有合法
+                    # beam label，CSV里用-1做sentinel(见carla_V2V的实验
+                    # 记录任务24/26)——不是bug，是预期的物理边界情况，
+                    # 但不能当成一个真实的64-way类别喂给分类器训练。
                     continue
                 infos.append((scene, f'vehicle_{RX_VEHICLE}', str(sid), link))
         return infos

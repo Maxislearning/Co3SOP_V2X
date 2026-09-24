@@ -26,8 +26,16 @@ import torch
 from torch.utils.data import Dataset
 
 CANON_DIR = '/home/admin0/carla_V2V/occupancy_prediction_beam/beam_occ_native'
-BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/channel_summary_from_carla_20260916_004652.csv'
-CONFIG_FOR_SPLIT = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ.py'
+# 任务25/26 (2026-09-23/24): 合并legacy(783,pre-route3) + route3
+# seed1-5(6194) = 7748个sample, 3874个独立场景。见carla_V2V的
+# V2X_beam_selection_实验记录.txt 任务25/26 -- sample_id用offset方案
+# 区分来源(legacy不变，seed1..5各自+1000*k)，CANON_DIR不用改
+# (beam_occ_native/{sid:06d}/ 已经用offset后的sid写好了，跟legacy的
+# 1-783不会撞)。原来的单一来源版本仍在(channel_summary_from_carla_
+# 20260916_004652.csv / co3sop_base_carla_v2v_target_occ.py)，未删除，
+# 可随时切回。
+BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/dataset_full_merged_20260923.csv'
+CONFIG_FOR_SPLIT = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ_merged_v3.py'
 
 
 def _build_split_infos(split):

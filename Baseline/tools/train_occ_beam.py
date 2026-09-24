@@ -13,6 +13,7 @@ import json
 import os
 import sys
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -20,13 +21,85 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, '/home/admin0/carla_V2V/src')
 from projects.mmdet3d_plugin_carla_v2v.datasets.occ_beam_dataset import OccBeamDataset
-from projects.mmdet3d_plugin.co3sop_base.dense_heads.occ_beam_encoder import OccupancyBeamEncoder
+from projects.mmdet3d_plugin.co3sop_base.dense_heads.occ_beam_encoder import (
+    OccupancyBeamEncoder, HierarchicalOccupancyBeamEncoder)
 import panel_beamforming as pb
 
 CHANNELS_TO_CIN = {'scene': 3, 'target': 1, 'scene_target': 4}
+NUM_CLASSES = pb.NUM_PANELS * pb.BEAMS_PER_PANEL  # 64
 
 
-def evaluate(model, loader, device):
+def panel_sqrt_inv_freq_weights(train_ds):
+    """任务22 A2: panel-level (4-way) analogue of sqrt_inv_freq_weights,
+    used for the hierarchical model's panel head only -- the in-panel head
+    stays unweighted since the diagnosis found no in-panel imbalance
+    problem, only a panel-level one."""
+    tx_counts = np.zeros(pb.NUM_PANELS, dtype=np.float64)
+    rx_counts = np.zeros(pb.NUM_PANELS, dtype=np.float64)
+    for i in range(len(train_ds)):
+        _, tx, rx, _ = train_ds[i]
+        tx_counts[int(tx) // pb.BEAMS_PER_PANEL] += 1
+        rx_counts[int(rx) // pb.BEAMS_PER_PANEL] += 1
+
+    def to_weight(counts):
+        w = 1.0 / np.sqrt(np.maximum(counts, 1.0))
+        w = w / w.mean()
+        return torch.tensor(w, dtype=torch.float32)
+
+    tx_w, rx_w = to_weight(tx_counts), to_weight(rx_counts)
+    print(f'[panel loss weighting] tx panel counts={tx_counts.astype(int).tolist()} '
+          f'({[pb.PANEL_NAMES[p] for p in range(pb.NUM_PANELS)]}) weight={np.round(tx_w.numpy(),2).tolist()}')
+    print(f'[panel loss weighting] rx panel counts={rx_counts.astype(int).tolist()} '
+          f'weight={np.round(rx_w.numpy(),2).tolist()}')
+    return tx_w, rx_w
+
+
+def sqrt_inv_freq_weights(train_ds):
+    """任务22 A1: minimal-intervention fix for the diagnosed panel-level
+    class-imbalance collapse (flat-64 head unchanged, only the loss is
+    reweighted). weight[c] = 1/sqrt(count[c]), normalized so the mean over
+    OBSERVED classes is 1 (keeps overall loss scale comparable to
+    unweighted CE). Classes with 0 train samples never appear as a target,
+    so their weight value is irrelevant to training -- given count=1 only
+    to avoid a division by zero."""
+    tx_counts = np.zeros(NUM_CLASSES, dtype=np.float64)
+    rx_counts = np.zeros(NUM_CLASSES, dtype=np.float64)
+    for i in range(len(train_ds)):
+        _, tx, rx, _ = train_ds[i]
+        tx_counts[int(tx)] += 1
+        rx_counts[int(rx)] += 1
+
+    def to_weight(counts):
+        safe = np.maximum(counts, 1.0)
+        w = 1.0 / np.sqrt(safe)
+        observed = counts > 0
+        w = w / w[observed].mean()
+        return torch.tensor(w, dtype=torch.float32)
+
+    tx_w, rx_w = to_weight(tx_counts), to_weight(rx_counts)
+    print(f'[loss weighting] tx: {int((tx_counts>0).sum())}/{NUM_CLASSES} classes observed in train, '
+          f'weight range [{tx_w.min():.2f}, {tx_w.max():.2f}]')
+    print(f'[loss weighting] rx: {int((rx_counts>0).sum())}/{NUM_CLASSES} classes observed in train, '
+          f'weight range [{rx_w.min():.2f}, {rx_w.max():.2f}]')
+    return tx_w, rx_w
+
+
+def forward_combined(model, vol, architecture):
+    """Returns (tx_logits[B,64], rx_logits[B,64]) regardless of architecture
+    -- for 'hierarchical', combines panel+in-panel logits via log-prob
+    addition (see HierarchicalOccupancyBeamEncoder's docstring) so all
+    downstream eval code stays architecture-agnostic."""
+    if architecture == 'flat':
+        return model(vol)
+    tx_panel, tx_inpanel, rx_panel, rx_inpanel = model(vol)
+    tx_logits = HierarchicalOccupancyBeamEncoder.combine_to_flat_logits(
+        tx_panel, tx_inpanel, pb.NUM_PANELS, pb.BEAMS_PER_PANEL)
+    rx_logits = HierarchicalOccupancyBeamEncoder.combine_to_flat_logits(
+        rx_panel, rx_inpanel, pb.NUM_PANELS, pb.BEAMS_PER_PANEL)
+    return tx_logits, rx_logits
+
+
+def evaluate(model, loader, device, architecture):
     """Combined (64-way) top1 AND panel-level (4-way, idx//BEAMS_PER_PANEL)
     top1 -- panel accuracy is the cheap sanity signal for "does the model
     know front/rear/left/right at all", tracked every epoch so a training
@@ -36,7 +109,7 @@ def evaluate(model, loader, device):
     with torch.no_grad():
         for vol, tx, rx, _ in loader:
             vol, tx, rx = vol.to(device), tx.to(device), rx.to(device)
-            tx_logits, rx_logits = model(vol)
+            tx_logits, rx_logits = forward_combined(model, vol, architecture)
             tx_pred, rx_pred = tx_logits.argmax(1), rx_logits.argmax(1)
             correct_tx += (tx_pred == tx).sum().item()
             correct_rx += (rx_pred == rx).sum().item()
@@ -61,6 +134,14 @@ def main():
                              'showed val performance peaking around epoch 13-17 then degrading, with the '
                              'RX head fully collapsing to a constant prediction by epoch 30; best.pth was '
                              'already tracked, this just stops wasting epochs training past the peak)')
+    parser.add_argument('--loss-weighting', choices=['none', 'sqrt_inv_freq'], default='none',
+                        help='任务22 A1: sqrt_inv_freq reweights CrossEntropyLoss by '
+                             '1/sqrt(train class count) (flat: full 64-way count; hierarchical: '
+                             'panel-head only, by 4-way panel count -- in-panel head stays unweighted).')
+    parser.add_argument('--architecture', choices=['flat', 'hierarchical'], default='flat',
+                        help='任务22 A2: hierarchical = separate 4-way panel + 16-way (shared) '
+                             'in-panel heads per side, so panel loss can be reweighted independently. '
+                             'flat (default) = OccupancyBeamEncoder, single 64-way head per side (A0/A1).')
     args = parser.parse_args()
 
     work_dir = args.work_dir or f'work_dirs/occ_beam_{args.source}_{args.channels}'
@@ -76,10 +157,30 @@ def main():
     train_eval_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
-    model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels]).to(device)
+    if args.architecture == 'flat':
+        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels]).to(device)
+    else:
+        model = HierarchicalOccupancyBeamEncoder(
+            in_channels=CHANNELS_TO_CIN[args.channels],
+            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-    criterion = nn.CrossEntropyLoss()
+
+    if args.architecture == 'flat':
+        if args.loss_weighting == 'sqrt_inv_freq':
+            tx_weight, rx_weight = sqrt_inv_freq_weights(train_ds)
+            tx_criterion = nn.CrossEntropyLoss(weight=tx_weight.to(device))
+            rx_criterion = nn.CrossEntropyLoss(weight=rx_weight.to(device))
+        else:
+            tx_criterion = rx_criterion = nn.CrossEntropyLoss()
+    else:
+        if args.loss_weighting == 'sqrt_inv_freq':
+            tx_panel_w, rx_panel_w = panel_sqrt_inv_freq_weights(train_ds)
+            tx_panel_criterion = nn.CrossEntropyLoss(weight=tx_panel_w.to(device))
+            rx_panel_criterion = nn.CrossEntropyLoss(weight=rx_panel_w.to(device))
+        else:
+            tx_panel_criterion = rx_panel_criterion = nn.CrossEntropyLoss()
+        tx_inpanel_criterion = rx_inpanel_criterion = nn.CrossEntropyLoss()  # always unweighted, per diagnosis
 
     best_val = -1.0
     epochs_since_improvement = 0
@@ -90,8 +191,17 @@ def main():
         n_batches = 0
         for vol, tx, rx, _ in train_loader:
             vol, tx, rx = vol.to(device), tx.to(device), rx.to(device)
-            tx_logits, rx_logits = model(vol)
-            loss = criterion(tx_logits, tx) + criterion(rx_logits, rx)
+            if args.architecture == 'flat':
+                tx_logits, rx_logits = model(vol)
+                loss = tx_criterion(tx_logits, tx) + rx_criterion(rx_logits, rx)
+            else:
+                tx_panel_logits, tx_inpanel_logits, rx_panel_logits, rx_inpanel_logits = model(vol)
+                tx_panel_gt, tx_local_gt = tx // pb.BEAMS_PER_PANEL, tx % pb.BEAMS_PER_PANEL
+                rx_panel_gt, rx_local_gt = rx // pb.BEAMS_PER_PANEL, rx % pb.BEAMS_PER_PANEL
+                loss = (tx_panel_criterion(tx_panel_logits, tx_panel_gt) +
+                        tx_inpanel_criterion(tx_inpanel_logits, tx_local_gt) +
+                        rx_panel_criterion(rx_panel_logits, rx_panel_gt) +
+                        rx_inpanel_criterion(rx_inpanel_logits, rx_local_gt))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -99,8 +209,8 @@ def main():
             n_batches += 1
         scheduler.step()
 
-        tx_acc, rx_acc, tx_panel_acc, rx_panel_acc = evaluate(model, val_loader, device)
-        tr_tx_acc, tr_rx_acc, tr_tx_panel_acc, tr_rx_panel_acc = evaluate(model, train_eval_loader, device)
+        tx_acc, rx_acc, tx_panel_acc, rx_panel_acc = evaluate(model, val_loader, device, args.architecture)
+        tr_tx_acc, tr_rx_acc, tr_tx_panel_acc, tr_rx_panel_acc = evaluate(model, train_eval_loader, device, args.architecture)
         avg_loss = total_loss / n_batches
         history.append({
             'epoch': epoch, 'loss': avg_loss,

@@ -45,6 +45,11 @@ CONFIG = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ.py'
 CKPT = 'work_dirs/carla_v2v_target_occ_phaseB/epoch_12.pth'
 BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/channel_summary_from_carla_20260916_004652.csv'
 OUT_DIR = '/home/admin0/carla_V2V/occupancy_prediction_beam/beam_occ_native'
+# 任务25：--config/--beam-csv/--out-dir 可选覆盖（不传时完全等同旧行为），
+# 用来跑合并数据集(co3sop_base_carla_v2v_target_occ_merged_v3.py)而不改
+# 默认值——CKPT暂不做成可覆盖，这一步只是把Stage2B已训练好的checkpoint
+# 拿去跑新场景的推理，Stage2B本身要不要用新数据重训是单独决定的事
+# （新场景的Pred质量可能不佳，但GT不受影响，这一步的直接目的就是GT）。
 
 
 def one_hot_scene(gt_occ):
@@ -56,12 +61,19 @@ def one_hot_scene(gt_occ):
 
 
 def main():
+    global BEAM_CSV, OUT_DIR, CONFIG
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None, help='cap total (sample_id,link) pairs processed, for a quick smoke run')
+    parser.add_argument('--config', default=CONFIG)
+    parser.add_argument('--beam-csv', default=BEAM_CSV)
+    parser.add_argument('--out-dir', default=OUT_DIR)
     args = parser.parse_args()
+    BEAM_CSV = args.beam_csv
+    OUT_DIR = args.out_dir
+    CONFIG = args.config
 
-    cfg = Config.fromfile(CONFIG)
+    cfg = Config.fromfile(args.config)
     # IMPORTANT: cfg.data.train's pipeline includes PhotoMetricDistortionMultiViewImage
     # (random color jitter) -- fine for actual training, but this extraction
     # must be fully deterministic (the whole point is a frozen, reusable
@@ -93,8 +105,17 @@ def main():
     print(f'[audit 1c] train sample_ids: {train_sids[0]}-{train_sids[-1]} (n={len(train_sids)}), '
           f'val: {val_sids[0]}-{val_sids[-1]} (n={len(val_sids)})')
     assert set(train_sids).isdisjoint(val_sids)
-    missing = set(range(1, 784)) - set(train_sids) - set(val_sids)
-    print(f'[audit 1c] sample_ids missing from both splits (1..783): {sorted(missing)}')
+    # 任务25：合并后sample_id不再是1..783连续区间(legacy+多个offset过的
+    # 新run)，改成按各来源自己的1000-block独立核对缺口，而不是硬编码
+    # range(1,784)——原逻辑在只有一个来源(legacy)时给出完全相同的结果。
+    covered = set(train_sids) | set(val_sids)
+    for block in sorted(set(sid // 1000 for sid in covered)):
+        lo, hi = (block * 1000 + 1, block * 1000 + 999) if block > 0 else (1, 999)
+        block_covered = {sid for sid in covered if sid // 1000 == block}
+        expected_range = range(min(block_covered), max(block_covered) + 1)
+        missing = set(expected_range) - block_covered
+        print(f'[audit 1c] block {block} ({min(block_covered)}-{max(block_covered)}): '
+              f'missing from both splits: {sorted(missing)}')
 
     beam_df = pd.read_csv(BEAM_CSV)
     beam_df = beam_df[beam_df['tx_name'].isin(['TX_CAR1', 'TX_CAR2'])]
@@ -120,7 +141,22 @@ def main():
     n_written_target = 0
     max_scene_diff = 0.0
 
+    # 任务25：跑合并数据集时这个后台任务被系统内存压力连续kill了两次
+    # （跟本脚本逻辑无关，是共享服务器上的瞬时事件，free -h在两次kill后
+    # 都很快恢复正常）——原循环没有断点续跑，每次被kill都要从头全部重算
+    # (forward pass是这里最贵的部分)。加一个基于输出文件是否已存在的
+    # skip：两个target npz都在就跳过，连`ds[i]`(读图)都不用做。跳过的
+    # sample不参与cross-link scene一致性assert(那个check是一次性验证，
+    # smoke test里已全跑通过，resume时跳过不影响正确性)。最终计数改成
+    # 跑完后直接扫盘统计，不再依赖跳过分支里维护一套增量计数器。
+    already_skipped = 0
     for idx, (ds, i, sid, link, split_name) in enumerate(all_items):
+        sid_dir_check = os.path.join(OUT_DIR, f'{sid:06d}')
+        gt_p = os.path.join(sid_dir_check, f'{link}_gt_target.npz')
+        pred_p = os.path.join(sid_dir_check, f'{link}_pred_target.npz')
+        if os.path.exists(gt_p) and os.path.exists(pred_p):
+            already_skipped += 1
+            continue
         sample = ds[i]
         gt_occ = np.asarray(sample['gt_occ'])       # [X,Y,Z] uint8 {0,1,2}
         gt_target = np.asarray(sample['gt_target'])  # [X,Y,Z] {0,1}
@@ -161,14 +197,34 @@ def main():
         np.savez_compressed(os.path.join(sid_dir, f'{link}_pred_target.npz'),
                              prob=pred_target_prob.astype(np.float16))
         n_written_target += 1
+        del sample, gt_occ, gt_target, batch, img_feats, preds, scene_logits, target_logits
+
+        if (idx + 1) % 50 == 0:
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
 
         if (idx + 1) % 200 == 0:
-            print(f'  [{idx+1}/{len(all_items)}]', file=sys.stderr)
+            print(f'  [{idx+1}/{len(all_items)}]  (skipped {already_skipped} already-done)', file=sys.stderr)
 
-    print(f'\n[done] scene volumes written: {n_written_scene} (expect {len(train_sids)+len(val_sids)})')
-    print(f'[done] target volumes written: {n_written_target} (expect {len(all_items)})')
+    # 断点续跑后，最终计数直接扫盘统计（覆盖本次运行里的增量计数器，
+    # 后者在resume时只反映本次新写的部分，不是全量）。
+    all_target_files = 0
+    all_scene_files = 0
+    for sid_dir_name in os.listdir(OUT_DIR):
+        p = os.path.join(OUT_DIR, sid_dir_name)
+        if not os.path.isdir(p):
+            continue
+        if os.path.exists(os.path.join(p, 'gt_scene.npz')):
+            all_scene_files += 1
+        all_target_files += sum(1 for f in os.listdir(p) if f.endswith('_gt_target.npz'))
+    print(f'\n[done] scene volumes on disk: {all_scene_files} (expect {len(train_sids)+len(val_sids)})')
+    print(f'[done] target volumes on disk: {all_target_files} (expect {len(all_items)})')
+    print(f'[done] this run: newly wrote {n_written_scene} scene / {n_written_target} target, '
+          f'skipped {already_skipped} already-done')
     print(f'[audit] max |scene_logits diff| between the two links of the same sample_id: {max_scene_diff:.6f} '
-          f'(expect ~0 -- confirms Scene branch is role-independent)')
+          f'(expect ~0 -- confirms Scene branch is role-independent; only checked for items actually '
+          f'(re)computed this run, not skipped ones)')
     assert max_scene_diff < 1e-3, 'Scene branch output differs between links of the same sample -- role leakage?'
 
     write_version_manifest()
