@@ -34,8 +34,8 @@ CANON_DIR = '/home/admin0/carla_V2V/occupancy_prediction_beam/beam_occ_native'
 # 1-783不会撞)。原来的单一来源版本仍在(channel_summary_from_carla_
 # 20260916_004652.csv / co3sop_base_carla_v2v_target_occ.py)，未删除，
 # 可随时切回。
-BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/dataset_full_merged_20260923.csv'
-CONFIG_FOR_SPLIT = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ_merged_v3.py'
+BEAM_CSV = '/home/admin0/carla_V2V/channel_analysis/dataset_full_merged_20260929_regen.csv'  # v4，见configs/co3sop_base/..._merged_v4.py
+CONFIG_FOR_SPLIT = 'projects/configs/co3sop_base/co3sop_base_carla_v2v_target_occ_merged_v4.py'
 
 
 def _build_split_infos(split):

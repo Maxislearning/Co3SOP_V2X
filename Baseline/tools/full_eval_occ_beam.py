@@ -119,6 +119,8 @@ def report_side(name, logits, gt, train_gt_for_baseline):
     print(f'  4-way panel majority baseline (train majority panel={pb.PANEL_NAMES[maj_panel]}): '
           f'acc={float((gt // K == maj_panel).mean()):.3f}')
     print(f'  Top1/3/5 (64-way): {topk_acc(logits, gt, 1):.3f} / {topk_acc(logits, gt, 3):.3f} / {topk_acc(logits, gt, 5):.3f}')
+    topk_list = [float(topk_acc(logits, gt, k)) for k in range(1, 11)]
+    print(f'  Top1-10 (64-way): ' + ' / '.join(f'{a:.3f}' for a in topk_list))
     panel_acc = float((pred // K == gt // K).mean())
     print(f'  Panel accuracy: {panel_acc:.3f}')
     print(f'  Per-panel recall (GT-panel conditioned):')
@@ -135,7 +137,7 @@ def report_side(name, logits, gt, train_gt_for_baseline):
     print(f'  GT class distribution (top5):   {collections.Counter(gt.tolist()).most_common(5)}')
     gt_panel_dist = collections.Counter((gt // K).tolist())
     print(f'  GT panel distribution: {[(pb.PANEL_NAMES[p], c) for p, c in sorted(gt_panel_dist.items())]}')
-    return {'panel_acc': panel_acc, 'top1': topk_acc(logits, gt, 1), 'inpanel_top1': ip1}
+    return {'panel_acc': panel_acc, 'top1': topk_acc(logits, gt, 1), 'inpanel_top1': ip1, 'topk_1_10': topk_list}
 
 
 def main():
@@ -165,12 +167,38 @@ def main():
     tx_logits_va, rx_logits_va, tx_gt_va, rx_gt_va = collect_logits(model, val_ds, args.architecture)
 
     print(f'\n========== {args.source}/{args.channels} [{args.ckpt}, {args.architecture}] -- TX ==========')
-    report_side('train', tx_logits_tr, tx_gt_tr, tx_gt_tr)
-    report_side('val', tx_logits_va, tx_gt_va, tx_gt_tr)
+    tx_tr = report_side('train', tx_logits_tr, tx_gt_tr, tx_gt_tr)
+    tx_va = report_side('val', tx_logits_va, tx_gt_va, tx_gt_tr)
 
     print(f'\n========== {args.source}/{args.channels} [{args.ckpt}, {args.architecture}] -- RX ==========')
-    report_side('train', rx_logits_tr, rx_gt_tr, rx_gt_tr)
-    report_side('val', rx_logits_va, rx_gt_va, rx_gt_tr)
+    rx_tr = report_side('train', rx_logits_tr, rx_gt_tr, rx_gt_tr)
+    rx_va = report_side('val', rx_logits_va, rx_gt_va, rx_gt_tr)
+
+    # 联合beam对Top-k：把TX/RX各自的log-softmax相加，对全部64x64=4096个(tx,rx)
+    # beam对排序，GT的(tx,rx)对落在前k个里算命中——对应"实际要扫描k个beam对"
+    # 的场景，比TX/RX各自单独的Top-k更贴近真实的beam训练开销。
+    def joint_topk(tx_logits, rx_logits, tx_gt, rx_gt, ks=range(1, 11)):
+        def lsm(x):
+            x = x - x.max(1, keepdims=True)
+            return x - np.log(np.exp(x).sum(1, keepdims=True))
+        joint = lsm(tx_logits)[:, :, None] + lsm(rx_logits)[:, None, :]  # [N,64tx,64rx]
+        flat = joint.reshape(len(joint), -1)
+        gt_idx = tx_gt * rx_logits.shape[1] + rx_gt
+        order = np.argsort(-flat, axis=1)[:, :max(ks)]
+        return [float((order[:, :k] == gt_idx[:, None]).any(1).mean()) for k in ks]
+
+    print(f'\n========== {args.source}/{args.channels} -- JOINT (TX,RX) beam-pair Top-k over 4096 pairs ==========')
+    jt_tr = joint_topk(tx_logits_tr, rx_logits_tr, tx_gt_tr, rx_gt_tr)
+    jt_va = joint_topk(tx_logits_va, rx_logits_va, tx_gt_va, rx_gt_va)
+    print('  train Top1-10: ' + ' / '.join(f'{a:.3f}' for a in jt_tr))
+    print('  val   Top1-10: ' + ' / '.join(f'{a:.3f}' for a in jt_va))
+
+    import json
+    with open(os.path.join(work_dir, f'topk_{os.path.splitext(args.ckpt)[0]}.json'), 'w') as f:
+        json.dump({'tx': {'train': tx_tr['topk_1_10'], 'val': tx_va['topk_1_10']},
+                   'rx': {'train': rx_tr['topk_1_10'], 'val': rx_va['topk_1_10']},
+                   'joint': {'train': jt_tr, 'val': jt_va},
+                   'panel_acc': {'tx_val': tx_va['panel_acc'], 'rx_val': rx_va['panel_acc']}}, f, indent=1)
 
 
 if __name__ == '__main__':
