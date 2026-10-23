@@ -1,0 +1,4 @@
+delta,tau,seeds,runs,sim
+0.0,0.1,3,20,"n=20: power=0.053 (95% MC CI 0.046-0.060, 4000 sims; 0 failed, 0 warned)"
+0.05,0.1,3,36,"n=36: power=0.772 (95% MC CI 0.759-0.785, 4000 sims; 0 failed, 0 warned)"
+0.1,0.14,3,18,"n=18: power=0.791 (95% MC CI 0.778-0.803, 4000 sims; 0 failed, 0 warned)"

@@ -142,7 +142,19 @@ def main():
                         help='任务22 A2: hierarchical = separate 4-way panel + 16-way (shared) '
                              'in-panel heads per side, so panel loss can be reweighted independently. '
                              'flat (default) = OccupancyBeamEncoder, single 64-way head per side (A0/A1).')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='任务34: seeds torch/numpy/random and the train-loader shuffle for multi-seed '
+                             'repeats. Default None = unseeded, identical to the original v4 sweep.')
     args = parser.parse_args()
+
+    loader_gen = None
+    if args.seed is not None:
+        import random
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        loader_gen = torch.Generator().manual_seed(args.seed)
 
     work_dir = args.work_dir or f'work_dirs/occ_beam_{args.source}_{args.channels}'
     os.makedirs(work_dir, exist_ok=True)
@@ -153,7 +165,8 @@ def main():
     val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)
     print(f'[{args.source}/{args.channels}] train n={len(train_ds)} val n={len(val_ds)}')
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=False)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=False,
+                              generator=loader_gen)
     train_eval_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 

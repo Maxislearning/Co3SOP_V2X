@@ -1,0 +1,32 @@
+{
+ "gt_scene": [
+  "s0",
+  "s1",
+  "s2"
+ ],
+ "gt_target": [
+  "s0",
+  "s1",
+  "s2"
+ ],
+ "gt_scene_target": [
+  "s0",
+  "s1",
+  "s2"
+ ],
+ "pred_scene": [
+  "s0",
+  "s1",
+  "s2"
+ ],
+ "pred_target": [
+  "s0",
+  "s1",
+  "s2"
+ ],
+ "pred_scene_target": [
+  "s0",
+  "s1",
+  "s2"
+ ]
+}
