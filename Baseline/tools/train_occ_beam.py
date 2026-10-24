@@ -145,6 +145,16 @@ def main():
     parser.add_argument('--seed', type=int, default=None,
                         help='任务34: seeds torch/numpy/random and the train-loader shuffle for multi-seed '
                              'repeats. Default None = unseeded, identical to the original v4 sweep.')
+    parser.add_argument('--coord-conv', nargs='?', const='dense', default=False, choices=['dense', 'gated'],
+                        help='任务35: append normalized (z,y,x) coordinate channels to the input (CoordConv) -- '
+                             'fixes gt/target underfitting from the translation-invariant conv+GAP trunk. '
+                             'dense (bare flag) = everywhere; gated = multiplied by occupancy (no init plateau). '
+                             'Default off = identical to the v4 sweep.')
+    parser.add_argument('--split-file', type=str, default=None,
+                        help='任务35: JSON with "train"/"val" lists of [sample_id, link] (tools/loro_cv.py); '
+                             'val is then the inner early-stopping split. Default = Stage 2B config split.')
+    parser.add_argument('--num-workers', type=int, default=4,
+                        help='train loader workers (eval loaders use min(2, this)); lower under memory pressure')
     args = parser.parse_args()
 
     loader_gen = None
@@ -161,21 +171,29 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    train_ds = OccBeamDataset(split='train', source=args.source, channels=args.channels)
-    val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)
+    if args.split_file:
+        with open(args.split_file) as f:
+            split = json.load(f)
+        train_ds = OccBeamDataset('train', args.source, args.channels, infos=split['train'])
+        val_ds = OccBeamDataset('val', args.source, args.channels, infos=split['val'])
+    else:
+        train_ds = OccBeamDataset(split='train', source=args.source, channels=args.channels)
+        val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)
     print(f'[{args.source}/{args.channels}] train n={len(train_ds)} val n={len(val_ds)}')
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=False,
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=False,
                               generator=loader_gen)
-    train_eval_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
+    train_eval_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=min(2, args.num_workers))
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=min(2, args.num_workers))
 
     if args.architecture == 'flat':
-        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels]).to(device)
+        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels],
+                                     coord_channels=args.coord_conv).to(device)
     else:
         model = HierarchicalOccupancyBeamEncoder(
             in_channels=CHANNELS_TO_CIN[args.channels],
-            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL).to(device)
+            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL,
+            coord_channels=args.coord_conv).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 

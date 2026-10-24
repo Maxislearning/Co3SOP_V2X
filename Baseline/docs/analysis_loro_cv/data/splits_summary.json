@@ -1,0 +1,40 @@
+{
+  "args": {
+    "out": "work_dirs/loro_cv/splits",
+    "val_frac": 0.15,
+    "gap": 10,
+    "drop_stage2b_train": false
+  },
+  "folds": {
+    "legacy": {
+      "train": 5142,
+      "val": 908,
+      "test": 314
+    },
+    "seed1": {
+      "train": 5384,
+      "val": 950,
+      "test": 1280
+    },
+    "seed2": {
+      "train": 5526,
+      "val": 980,
+      "test": 1108
+    },
+    "seed3": {
+      "train": 5412,
+      "val": 964,
+      "test": 1238
+    },
+    "seed4": {
+      "train": 5377,
+      "val": 946,
+      "test": 1291
+    },
+    "seed5": {
+      "train": 5419,
+      "val": 962,
+      "test": 1233
+    }
+  }
+}

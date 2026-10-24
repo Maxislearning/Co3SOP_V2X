@@ -147,6 +147,7 @@ def main():
     parser.add_argument('--ckpt', default='best.pth')
     parser.add_argument('--work-dir', default=None)
     parser.add_argument('--architecture', choices=['flat', 'hierarchical'], default='flat')
+    parser.add_argument('--coord-conv', nargs='?', const='dense', default=False, choices=['dense', 'gated'], help='任务35: model was trained with --coord-conv')
     args = parser.parse_args()
 
     work_dir = args.work_dir or f'work_dirs/occ_beam_{args.source}_{args.channels}'
@@ -154,11 +155,11 @@ def main():
     val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)
 
     if args.architecture == 'flat':
-        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels])
+        model = OccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[args.channels], coord_channels=args.coord_conv)
     else:
         model = HierarchicalOccupancyBeamEncoder(
             in_channels=CHANNELS_TO_CIN[args.channels],
-            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL)
+            num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL, coord_channels=args.coord_conv)
     state = torch.load(os.path.join(work_dir, args.ckpt), map_location='cpu')
     model.load_state_dict(state)
     model.eval()

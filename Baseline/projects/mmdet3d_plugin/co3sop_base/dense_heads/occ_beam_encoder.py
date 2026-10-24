@@ -12,6 +12,7 @@
 # elementwise/conv over whatever 3 spatial dims it's given), but documented
 # here anyway since a future reader must not assume the disk order.
 # ---------------------------------------------
+import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
@@ -38,9 +39,27 @@ class _Backbone(nn.Module):
     """Shared Cartesian 3D CNN trunk -- identical for both OccupancyBeamEncoder
     (flat 64-way head) and HierarchicalOccupancyBeamEncoder (4-way panel +
     16-way in-panel heads, 任务22 A2), so the two only differ in their heads,
-    never in the features they're built on."""
-    def __init__(self, in_channels, embed_dim):
+    never in the features they're built on.
+
+    coord_channels (任务35): append 3 normalized (z,y,x) coordinate channels
+    in [-1,1] to the input (CoordConv). Without them the trunk is
+    conv + global-average-pool, i.e. nearly translation-invariant, so a
+    sparse binary GT target mask (a ~400-voxel box whose only informative
+    property is WHERE it sits relative to the RX ego at the grid centre)
+    loses its position -- the diagnosed cause of gt/target underfitting.
+    'dense' (or True): coordinates everywhere. They swamp the sparse input
+    at init, so training sits on the majority-class plateau for 3-8+ epochs.
+    'gated': coordinates multiplied by the voxel's occupancy (max over input
+    channels) -- input stays sparse and the pooled features carry the
+    occupied voxels' centroid directly."""
+    def __init__(self, in_channels, embed_dim, coord_channels=False):
         super().__init__()
+        if coord_channels is True:
+            coord_channels = 'dense'
+        assert coord_channels in (False, None, 'dense', 'gated'), coord_channels
+        self.coord_channels = coord_channels or False
+        if self.coord_channels:
+            in_channels += 3
         self.stem = _conv_gn_relu(in_channels, 32, kernel_size=3, stride=1, padding=1)
         self.blocks = nn.Sequential(
             _conv_gn_relu(32, 48, kernel_size=3, stride=2, padding=1),    # D:16->8  H/W:200->100
@@ -53,6 +72,14 @@ class _Backbone(nn.Module):
 
     def forward(self, x):
         # x: [B, C_in, 16, 200, 200]
+        if self.coord_channels:
+            B, _, D, H, W = x.shape
+            axes = [torch.linspace(-1.0, 1.0, n, device=x.device, dtype=x.dtype) for n in (D, H, W)]
+            grid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=0)  # [3,D,H,W]
+            grid = grid.unsqueeze(0).expand(B, -1, -1, -1, -1)
+            if self.coord_channels == 'gated':
+                grid = grid * x.amax(dim=1, keepdim=True)
+            x = torch.cat([x, grid], dim=1)
         x = self.stem(x)
         x = self.blocks(x)
         x = self.pool(x).flatten(1)  # [B,160]
@@ -60,9 +87,9 @@ class _Backbone(nn.Module):
 
 
 class OccupancyBeamEncoder(nn.Module):
-    def __init__(self, in_channels, num_tx_beams=64, num_rx_beams=64, embed_dim=256):
+    def __init__(self, in_channels, num_tx_beams=64, num_rx_beams=64, embed_dim=256, coord_channels=False):
         super().__init__()
-        self.backbone = _Backbone(in_channels, embed_dim)
+        self.backbone = _Backbone(in_channels, embed_dim, coord_channels)
         self.tx_head = nn.Linear(embed_dim, num_tx_beams)
         self.rx_head = nn.Linear(embed_dim, num_rx_beams)
 
@@ -94,11 +121,11 @@ class HierarchicalOccupancyBeamEncoder(nn.Module):
     log_softmax(inpanel_logits)[:, k] -- NOT a true joint likelihood in
     general, but preserves the correct argmax/topk ranking for the
     combined-metric eval code, which is all it's used for."""
-    def __init__(self, in_channels, num_panels=4, beams_per_panel=16, embed_dim=256):
+    def __init__(self, in_channels, num_panels=4, beams_per_panel=16, embed_dim=256, coord_channels=False):
         super().__init__()
         self.num_panels = num_panels
         self.beams_per_panel = beams_per_panel
-        self.backbone = _Backbone(in_channels, embed_dim)
+        self.backbone = _Backbone(in_channels, embed_dim, coord_channels)
         self.tx_panel_head = nn.Linear(embed_dim, num_panels)
         self.tx_inpanel_head = nn.Linear(embed_dim, beams_per_panel)
         self.rx_panel_head = nn.Linear(embed_dim, num_panels)

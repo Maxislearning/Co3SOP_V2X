@@ -60,8 +60,11 @@ class OccBeamDataset(Dataset):
         'scene_target': ('scene', 'target'),
     }
 
-    def __init__(self, split, source, channels, canon_dir=CANON_DIR, beam_csv_path=BEAM_CSV):
-        assert split in ('train', 'val')
+    def __init__(self, split, source, channels, canon_dir=CANON_DIR, beam_csv_path=BEAM_CSV, infos=None):
+        """infos (任务35): explicit [(sample_id, link), ...] overriding the
+        Stage 2B config split -- used by the leave-one-run-out CV split files
+        (tools/loro_cv.py); `split` is then only a label."""
+        assert infos is not None or split in ('train', 'val')
         assert source in ('gt', 'pred')
         assert channels in self.CHANNEL_SPECS, f'unknown channels={channels!r}'
         self.split = split
@@ -69,7 +72,10 @@ class OccBeamDataset(Dataset):
         self.channels = channels
         self.canon_dir = canon_dir
 
-        self.infos = _build_split_infos(split)  # [(sample_id, link), ...] -- locked to Stage 2B's own split
+        if infos is not None:
+            self.infos = [(int(s), str(l)) for s, l in infos]
+        else:
+            self.infos = _build_split_infos(split)  # [(sample_id, link), ...] -- locked to Stage 2B's own split
 
         beam_df = pd.read_csv(beam_csv_path)
         beam_df = beam_df[beam_df['tx_name'].isin(['TX_CAR1', 'TX_CAR2'])]
