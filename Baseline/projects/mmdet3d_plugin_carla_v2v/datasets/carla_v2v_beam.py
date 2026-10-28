@@ -36,8 +36,12 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
     LINK_VEHICLE = {'TX_CAR1': 1, 'TX_CAR2': 3}
 
     def __init__(self, beam_csv_path, links=('TX_CAR1', 'TX_CAR2'), los_only=False,
-                 target_occ_root=None, *args, **kwargs):
+                 target_occ_root=None, split_file=None, *args, **kwargs):
         self.beam_csv_path = beam_csv_path
+        # 任务37: leave-one-run-out split file (tools/loro_cv.py) -- when set,
+        # ann_file 'train' / 'val'|'validate' / 'test' take that file's
+        # (sample_id, link) lists instead of the per-bucket 80/20 cut below.
+        self.split_file = split_file
         self.links = links
         self.los_only = los_only
         # Stage 2B: set to load per-(sample_id,link) target_mask GT
@@ -95,11 +99,22 @@ class CarlaV2VBeamCo3SOP(CarlaV2VCo3SOP):
             split_sids.extend(bucket_sids[:n_train] if split == 'train' else bucket_sids[n_train:])
         split_sids = sorted(split_sids)
 
+        allowed = None
+        if self.split_file is not None:
+            import json
+            with open(self.split_file) as f:
+                fold = json.load(f)
+            key = {'train': 'train', 'validate': 'val', 'val': 'val', 'test': 'test'}[ann_file]
+            allowed = {(int(s), str(l)) for s, l in fold[key]}
+            split_sids = sorted({s for s, _ in allowed})
+
         scene = self.scenes[0]
         infos = []
         for sid in split_sids:
             for link in self.links:
                 tx_vn = self.LINK_VEHICLE[link]
+                if allowed is not None and (sid, link) not in allowed:
+                    continue
                 if (sid, link) not in self._beam_by_key:
                     continue
                 if (tx_vn, sid) not in self._by_key:

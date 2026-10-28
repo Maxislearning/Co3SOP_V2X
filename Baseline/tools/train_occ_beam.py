@@ -153,6 +153,8 @@ def main():
     parser.add_argument('--split-file', type=str, default=None,
                         help='任务35: JSON with "train"/"val" lists of [sample_id, link] (tools/loro_cv.py); '
                              'val is then the inner early-stopping split. Default = Stage 2B config split.')
+    parser.add_argument('--occ-dir', type=str, default=None,
+                        help='任务37: occupancy volume dir (default: OccBeamDataset CANON_DIR, the legacy-only Stage2B)')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='train loader workers (eval loaders use min(2, this)); lower under memory pressure')
     args = parser.parse_args()
@@ -174,8 +176,9 @@ def main():
     if args.split_file:
         with open(args.split_file) as f:
             split = json.load(f)
-        train_ds = OccBeamDataset('train', args.source, args.channels, infos=split['train'])
-        val_ds = OccBeamDataset('val', args.source, args.channels, infos=split['val'])
+        occ_kw = {'canon_dir': args.occ_dir} if args.occ_dir else {}
+        train_ds = OccBeamDataset('train', args.source, args.channels, infos=split['train'], **occ_kw)
+        val_ds = OccBeamDataset('val', args.source, args.channels, infos=split['val'], **occ_kw)
     else:
         train_ds = OccBeamDataset(split='train', source=args.source, channels=args.channels)
         val_ds = OccBeamDataset(split='val', source=args.source, channels=args.channels)

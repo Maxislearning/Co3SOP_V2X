@@ -16,6 +16,7 @@ p.add_argument('--work-dir', required=True); p.add_argument('--out', required=Tr
 p.add_argument('--coord-conv', nargs='?', const='dense', default=False, choices=['dense', 'gated'])  # 任务35
 p.add_argument('--split-file', default=None)  # 任务35: dump this file's --split list instead of the config val
 p.add_argument('--split', default='test')
+p.add_argument('--occ-dir', default=None)  # 任务37
 a = p.parse_args()
 model = HierarchicalOccupancyBeamEncoder(in_channels=CHANNELS_TO_CIN[a.channels],
                                          num_panels=pb.NUM_PANELS, beams_per_panel=pb.BEAMS_PER_PANEL,
@@ -25,7 +26,8 @@ model.eval()
 if a.split_file:
     import json
     with open(a.split_file) as f:
-        ds = OccBeamDataset(a.split, a.source, a.channels, infos=json.load(f)[a.split])
+        ds = OccBeamDataset(a.split, a.source, a.channels, infos=json.load(f)[a.split],
+                            **({'canon_dir': a.occ_dir} if a.occ_dir else {}))
 else:
     ds = OccBeamDataset('val', a.source, a.channels)
 tx_l, rx_l, tx_g, rx_g = collect_logits(model, ds, 'hierarchical')

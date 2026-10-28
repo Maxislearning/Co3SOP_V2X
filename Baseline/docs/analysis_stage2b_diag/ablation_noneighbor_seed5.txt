@@ -1,0 +1,4 @@
+new full 'scene_mIoU': 0.4750451835426767 'target_iou': 0.6084712198567453 'target_precision': 0.72415572998536 'target_recall': 0.7920511641186742 
+new noneighbor 'scene_mIoU': 0.3842601180388706 'target_iou': 0.02556333230406963 'target_precision': 0.03319595577432054 'target_recall': 0.10005623152177359 
+old full 'scene_mIoU': 0.2961681516825059 'target_iou': 0.22884178441045874 'target_precision': 0.32370055157526445 'target_recall': 0.4384894693681322 
+old noneighbor 'scene_mIoU': 0.30178392675335536 'target_iou': 0.047291939259713055 'target_precision': 0.060784070965394205 'target_recall': 0.1756365921012455 

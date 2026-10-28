@@ -61,14 +61,16 @@ def one_hot_scene(gt_occ):
 
 
 def main():
-    global BEAM_CSV, OUT_DIR, CONFIG
+    global BEAM_CSV, OUT_DIR, CONFIG, CKPT
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None, help='cap total (sample_id,link) pairs processed, for a quick smoke run')
     parser.add_argument('--config', default=CONFIG)
     parser.add_argument('--beam-csv', default=BEAM_CSV)
     parser.add_argument('--out-dir', default=OUT_DIR)
+    parser.add_argument('--ckpt', default=CKPT, help='任务37: Stage2B checkpoint (e.g. a LORO-fold retrain)')
     args = parser.parse_args()
+    CKPT = args.ckpt
     BEAM_CSV = args.beam_csv
     OUT_DIR = args.out_dir
     CONFIG = args.config
@@ -172,8 +174,10 @@ def main():
             target_logits = preds['target_preds'][-1][0].cpu().numpy()  # [2,X,Y,Z]
 
         # cross-link Scene equality check (role-independence assertion)
+        # 任务37：比完就pop——原来每个sid的[3,X,Y,Z] float32 logits(~7.7MB)
+        # 一直留在dict里，3875个sid累积到~30GB，被oomd杀(峰值39.9G)。
         if sid in scene_logits_by_sid:
-            diff = float(np.abs(scene_logits - scene_logits_by_sid[sid]).max())
+            diff = float(np.abs(scene_logits - scene_logits_by_sid.pop(sid)).max())
             max_scene_diff = max(max_scene_diff, diff)
         else:
             scene_logits_by_sid[sid] = scene_logits

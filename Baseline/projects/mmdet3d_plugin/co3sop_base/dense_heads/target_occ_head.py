@@ -44,7 +44,10 @@ class TargetAwareOccHead(V2VOccHead):
         self.lambda_focal = lambda_focal
         self.lambda_dice = lambda_dice
 
-        self.role_embedding = nn.Embedding(2, role_dim)  # 0=FRONT, 1=REAR -- identity only
+        # 0=TX_CAR1 (blue), 1=TX_CAR2 (orange) -- an identity token, not a position: 任务36 found the
+        # legacy-only checkpoint learned it as 'car in front'/'car behind' because TX_CAR1 was always
+        # ahead in that data (FRONT/REAR names kept below for checkpoint/back-compat)
+        self.role_embedding = nn.Embedding(2, role_dim)
 
         conv_cfg = dict(type='Conv3d', bias=False)
         self.film_proj = nn.ModuleList()
