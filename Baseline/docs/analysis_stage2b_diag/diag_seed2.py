@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """任务39: seed2 折为什么提升小。读 diag_target.py 对各折新 Stage2B 的输出 data/diag_loro_<fold>.csv
-（每折只取自己的测试 run），加上 GT 占用 beam 头的命中，按 link / 方位 / IoU 拆开 GT−新pred 的差距。"""
+（每折只取自己的测试 run），加上 GT 占用 beam 头的命中，按 link / 方位 / IoU 拆开 GT−新pred 的差距。
+任务48：beam 命中直接从 logits 读（默认 v5 = 28 GHz 标签：v5_gated、v5_s2b_<折>；TAG_PREFIX= 用 v4），
+CSV 里的占用质量列与标签无关，沿用。"""
+import os
 import numpy as np
 import pandas as pd
 
 FOLDS = ['legacy', 'seed1', 'seed2', 'seed3', 'seed4', 'seed5']
-GATED = '/home/admin0/Co3SOP/Baseline/work_dirs/loro_cv/gated/logits'
+ROOT = '/home/admin0/Co3SOP/Baseline/work_dirs/loro_cv'
+P = os.environ.get('TAG_PREFIX', 'v5_')
 
 
-def gt_hits(f):
-    z = np.load(f'{GATED}/gt_target_{f}_s0.npz')
+def hits(tag, combo, f):
+    z = np.load(f'{ROOT}/{tag}/logits/{combo}_{f}_s0.npz')
     ok = (z['tx'].argmax(1) // 16 == z['tx_gt'] // 16) & (z['rx'].argmax(1) // 16 == z['rx_gt'] // 16)
     return {(int(s), str(l)): bool(o) for s, l, o in zip(z['sample_id'], z['link'], ok)}
 
@@ -18,8 +22,9 @@ dfs = []
 for f in FOLDS:
     d = pd.read_csv(f'data/diag_loro_{f}.csv')
     d = d[d.run == f].copy()
-    g = gt_hits(f)
+    g, pr = hits(P + 'gated', 'gt_target', f), hits(f'{P}s2b_{f}', 'pred_target', f)
     d['hit_gt'] = [g.get((s, l), np.nan) for s, l in zip(d.sample_id, d.link)]
+    d['hit_pred_target'] = [pr.get((s, l), np.nan) for s, l in zip(d.sample_id, d.link)]
     dfs.append(d)
 d = pd.concat(dfs)
 d['iou0'] = d.iou3d.fillna(0)

@@ -5,7 +5,8 @@
 source /home/admin0/anaconda3/etc/profile.d/conda.sh; conda activate flashocc
 cd /home/admin0/Co3SOP/Baseline
 S=$1; SEEDS=${2:-"0 1 2"}; EXTRA=${3:-""}; TAG=${4:-main}
-SPLITS=work_dirs/loro_cv/splits; OUT=work_dirs/loro_cv/$TAG; mkdir -p $OUT/logits
+SPLITS=${SPLITS:-work_dirs/loro_cv/splits};  # 任务48：v5 用 SPLITS=work_dirs/loro_cv/splits_v5
+OUT=work_dirs/loro_cv/$TAG; mkdir -p $OUT/logits
 DUMP_EXTRA=$(grep -o -- "--coord-conv\( [a-z]*\)\?\|--occ-dir [^ ]*" <<< "$EXTRA" | tr "\n" " ")
 for SEED in $SEEDS; do
 for C in target scene_target; do
